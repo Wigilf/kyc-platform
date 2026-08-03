@@ -186,57 +186,13 @@ export async function buildServer() {
     },
   );
 
-  // --- Routes ---
-  await app.register(applicantsRoutes);
-  await app.register(decisionRoutes);
-  await app.register(configRoutes);
-  await app.register(kybRoutes);
-  await app.register(supportRoutes);
-  await app.register(transactionRoutes);
-
-  // --- Machine-readable API description ---
-  app.get('/openapi.json', async () => {
-    const routes: Array<{ method: string; url: string }> = [];
-    for (const line of app.printRoutes({ commonPrefix: false }).split('\n')) {
-      const match = /^[│├└─\s]*([a-z0-9/:._{}-]+)\s+\((.+)\)/i.exec(line);
-      if (match) {
-        for (const method of match[2]!.split(', ')) {
-          routes.push({ method, url: match[1]! });
-        }
-      }
-    }
-    return {
-      openapi: '3.1.0',
-      info: {
-        title: 'KYC Platform API',
-        version: '2026-07-01',
-        description:
-          'Identity verification, AML screening, KYB, transaction monitoring, and agentic support.',
-      },
-      servers: [{ url: `http://localhost:${process.env.API_PORT ?? 4000}` }],
-      // A route inventory rather than a hand-maintained spec: an inaccurate spec
-      // is worse than an honest list.
-      'x-routes': routes,
-      components: {
-        securitySchemes: {
-          apiKey: {
-            type: 'apiKey',
-            in: 'header',
-            name: 'X-Kyc-App-Token',
-            description:
-              'Server-to-server. Send with X-Kyc-App-Secret, X-Kyc-Timestamp, and X-Kyc-Signature (HMAC-SHA256 over `${ts}\\n${METHOD}\\n${path}\\n${sha256(body)}`).',
-          },
-          bearer: {
-            type: 'http',
-            scheme: 'bearer',
-            description: 'Applicant SDK token or dashboard session token.',
-          },
-        },
-      },
-    };
-  });
-
   // --- Error handling ---
+  //
+  // Registered before the routes on purpose. Fastify copies the error handler
+  // into each encapsulation context as that context is created, so a handler
+  // set after `register()` never reaches those routes: Zod failures surfaced
+  // as 500s instead of 400s, and thrown errors came back in Fastify's default
+  // envelope rather than this API's.
   app.setErrorHandler((rawError, request, reply) => {
     // Fastify types the handler's first argument loosely; narrow once here rather
     // than casting at each branch.
@@ -292,6 +248,56 @@ export async function buildServer() {
 
     request.log.error({ err: error }, 'unhandled error');
     return replyError(reply, error);
+  });
+
+  // --- Routes ---
+  await app.register(applicantsRoutes);
+  await app.register(decisionRoutes);
+  await app.register(configRoutes);
+  await app.register(kybRoutes);
+  await app.register(supportRoutes);
+  await app.register(transactionRoutes);
+
+  // --- Machine-readable API description ---
+  app.get('/openapi.json', async () => {
+    const routes: Array<{ method: string; url: string }> = [];
+    for (const line of app.printRoutes({ commonPrefix: false }).split('\n')) {
+      const match = /^[│├└─\s]*([a-z0-9/:._{}-]+)\s+\((.+)\)/i.exec(line);
+      if (match) {
+        for (const method of match[2]!.split(', ')) {
+          routes.push({ method, url: match[1]! });
+        }
+      }
+    }
+    return {
+      openapi: '3.1.0',
+      info: {
+        title: 'KYC Platform API',
+        version: '2026-07-01',
+        description:
+          'Identity verification, AML screening, KYB, transaction monitoring, and agentic support.',
+      },
+      servers: [{ url: `http://localhost:${process.env.API_PORT ?? 4000}` }],
+      // A route inventory rather than a hand-maintained spec: an inaccurate spec
+      // is worse than an honest list.
+      'x-routes': routes,
+      components: {
+        securitySchemes: {
+          apiKey: {
+            type: 'apiKey',
+            in: 'header',
+            name: 'X-Kyc-App-Token',
+            description:
+              'Server-to-server. Send with X-Kyc-App-Secret, X-Kyc-Timestamp, and X-Kyc-Signature (HMAC-SHA256 over `${ts}\\n${METHOD}\\n${path}\\n${sha256(body)}`).',
+          },
+          bearer: {
+            type: 'http',
+            scheme: 'bearer',
+            description: 'Applicant SDK token or dashboard session token.',
+          },
+        },
+      },
+    };
   });
 
   app.setNotFoundHandler((request, reply) =>

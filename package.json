@@ -11,9 +11,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "npm run build:packages && npm run build:dashboard",
+    "build": "npm run build:packages && npm run build:dashboard && npm run build:websdk",
     "build:packages": "tsc --build packages/core packages/db packages/adapters packages/agent packages/api packages/worker",
     "build:dashboard": "npm run -w @kyc/dashboard build",
+    "build:websdk": "npm run -w @kyc/websdk build",
+    "dev:websdk": "npm run -w @kyc/websdk dev",
     "clean": "rm -rf packages/*/dist apps/*/dist packages/*/*.tsbuildinfo",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
@@ -30,7 +32,7 @@
     "dev:dashboard": "npm run -w @kyc/dashboard dev",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --build --dry packages/core packages/db packages/adapters packages/agent packages/api packages/worker && tsc --noEmit -p apps/dashboard",
+    "typecheck": "tsc --build --dry packages/core packages/db packages/adapters packages/agent packages/api packages/worker && tsc --noEmit -p apps/dashboard && tsc --noEmit -p packages/websdk",
     "lint": "tsc --noEmit -p tsconfig.base.json || true"
   },
   "devDependencies": {

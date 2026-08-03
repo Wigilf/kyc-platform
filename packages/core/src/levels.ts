@@ -177,6 +177,80 @@ export const APPLICANT_FACING_STEPS: ReadonlySet<StepType> = new Set<StepType>([
   'AGE_ESTIMATION',
 ]);
 
+/**
+ * Which uploaded documents satisfy a step, when the level does not narrow it.
+ *
+ * A level sets `acceptedDocumentTypes` when it wants to restrict the choice —
+ * passport only, say. Most steps do not, because the answer follows from the
+ * step type: a selfie step is satisfied by a selfie. Deriving satisfaction from
+ * `acceptedDocumentTypes` alone treated an unset list as "nothing satisfies
+ * this", so the selfie and liveness steps stayed outstanding no matter what the
+ * applicant uploaded, and a verification could never be completed.
+ */
+const DEFAULT_DOCUMENT_TYPES: Partial<Record<StepType, string[]>> = {
+  IDENTITY_DOCUMENT: ['PASSPORT', 'ID_CARD', 'DRIVERS_LICENSE', 'RESIDENCE_PERMIT', 'VISA'],
+  NFC_READ: ['PASSPORT', 'ID_CARD', 'RESIDENCE_PERMIT'],
+  SELFIE: ['SELFIE', 'VIDEO_SELFIE'],
+  LIVENESS: ['VIDEO_SELFIE', 'SELFIE'],
+  AGE_ESTIMATION: ['SELFIE', 'VIDEO_SELFIE'],
+  PROOF_OF_ADDRESS: [
+    'UTILITY_BILL', 'BANK_STATEMENT', 'TAX_DOCUMENT', 'PROOF_OF_ADDRESS', 'PAYSLIP',
+  ],
+  SOURCE_OF_FUNDS: ['SOURCE_OF_FUNDS', 'BANK_STATEMENT', 'PAYSLIP', 'TAX_DOCUMENT'],
+  COMPANY_DOCUMENTS: [
+    'COMPANY_REGISTRATION', 'ARTICLES_OF_ASSOCIATION', 'SHAREHOLDER_REGISTRY',
+    'UBO_DECLARATION', 'POWER_OF_ATTORNEY',
+  ],
+};
+
+/** The document types that will satisfy this step. Empty means none will. */
+export function documentTypesForStep(step: StepDefinition): string[] {
+  const configured = step.config.acceptedDocumentTypes ?? [];
+  if (configured.length) return [...configured];
+  return DEFAULT_DOCUMENT_TYPES[step.type] ?? [];
+}
+
+/**
+ * Steps an applicant satisfies by supplying information rather than a file.
+ * They are applicant-facing but no upload will ever tick them off.
+ */
+export const NON_DOCUMENT_STEPS: ReadonlySet<StepType> = new Set<StepType>([
+  'APPLICANT_DATA', 'QUESTIONNAIRE', 'PHONE_VERIFICATION', 'EMAIL_VERIFICATION',
+  'VIDEO_INTERVIEW', 'E_SIGNATURE', 'COMPANY_DATA', 'WALLET_OWNERSHIP',
+]);
+
+/** Fields held in the encrypted PII blob rather than an indexed column. */
+export const PII_BLOB_FIELDS: readonly string[] = [
+  'address', 'taxId', 'placeOfBirth', 'occupation', 'employerName', 'sourceOfFunds',
+];
+
+export const DEFAULT_REQUIRED_APPLICANT_FIELDS: readonly string[] = [
+  'firstName', 'lastName', 'dob', 'country',
+];
+
+/**
+ * Which of the fields a step asks for the applicant has not supplied.
+ *
+ * Shared by the verification pipeline and the requirements endpoint so the
+ * applicant is never told they are done by one and incomplete by the other.
+ */
+export function missingApplicantFields(
+  required: readonly string[],
+  values: Record<string, unknown>,
+): string[] {
+  return required.filter((field) => {
+    const value = values[field];
+    return value === null || value === undefined || (typeof value === 'string' && !value.trim());
+  });
+}
+
+/** Wording for the applicant. Falls back to the type, made readable. */
+export function stepLabel(step: StepDefinition): string {
+  if (step.label) return step.label;
+  const words = step.type.replace(/_/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function step(
   id: string,
   type: StepType,

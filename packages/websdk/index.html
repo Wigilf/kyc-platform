@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KYC WebSDK — integration harness</title>
+    <style>
+      /* Deliberately aggressive host styles. If any of this reaches inside the
+         widget, the shadow root is not doing its job. */
+      body {
+        font: 16px/1.6 Georgia, serif;
+        margin: 0;
+        padding: 40px 20px;
+        background: #eef1f5;
+        color: #222;
+      }
+      * { letter-spacing: 0.4px; }
+      button { background: hotpink !important; border: 4px dashed red; font-size: 22px; }
+      h2 { color: hotpink; text-transform: uppercase; }
+      main { max-width: 900px; margin: 0 auto; display: grid; gap: 24px; }
+      .panel { background: #fff; border-radius: 12px; padding: 20px; }
+      .panel h1 { font-size: 18px; margin: 0 0 12px; }
+      label { display: block; font-size: 13px; margin: 10px 0 4px; font-family: sans-serif; }
+      input {
+        width: 100%; padding: 8px; font: 13px monospace;
+        border: 1px solid #ccd; border-radius: 6px;
+      }
+      #start { margin-top: 14px; padding: 10px 16px; cursor: pointer; }
+      #log {
+        font: 12px/1.5 ui-monospace, monospace;
+        background: #12151a; color: #cbd3e1;
+        padding: 14px; border-radius: 8px;
+        height: 220px; overflow: auto; white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="panel">
+        <h1>Integration harness</h1>
+        <p style="font-size: 13px; font-family: sans-serif">
+          Mint a token with your backend credentials, then mount the widget with it.
+          The surrounding page styles below are intentionally hostile.
+        </p>
+        <label for="base">API base URL</label>
+        <input id="base" value="http://localhost:4000" />
+        <label for="user">External user id</label>
+        <input id="user" value="sdk-demo-001" />
+        <button id="start">Mint token &amp; mount</button>
+      </div>
+
+      <div class="panel">
+        <h2>Widget</h2>
+        <div id="kyc"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Events</h2>
+        <div id="log"></div>
+      </div>
+    </main>
+
+    <script type="module">
+      import { KycVerification } from '/src/index.ts';
+
+      const logEl = document.getElementById('log');
+      const log = (...parts) => {
+        logEl.textContent += parts.join(' ') + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+
+      let handle = null;
+
+      document.getElementById('start').addEventListener('click', async () => {
+        const apiBaseUrl = document.getElementById('base').value.replace(/\/$/, '');
+        const externalUserId = document.getElementById('user').value;
+        handle?.destroy();
+        logEl.textContent = '';
+
+        try {
+          // A real integration does this server-side; the harness proxies it so
+          // no backend credential is ever typed into this page.
+          log('minting token for', externalUserId, '…');
+          const response = await fetch('/harness/token', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ apiBaseUrl, externalUserId }),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.message ?? 'token request failed');
+          log('applicant', payload.applicantId);
+
+          handle = KycVerification.mount({
+            container: '#kyc',
+            token: payload.token,
+            applicantId: payload.applicantId,
+            apiBaseUrl,
+            onEvent: (e) => log('event:', JSON.stringify(e)),
+            onComplete: (r) => log('complete:', JSON.stringify(r)),
+            onError: (e) => log('error:', e.message),
+          });
+        } catch (error) {
+          log('harness error:', error.message);
+        }
+      });
+    </script>
+  </body>
+</html>

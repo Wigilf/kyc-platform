@@ -1,19 +1,26 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  APPLICANT_FACING_STEPS,
   CreateApplicantSchema,
   CreateSdkTokenSchema,
+  DEFAULT_REQUIRED_APPLICANT_FIELDS,
   ListApplicantsQuerySchema,
+  PII_BLOB_FIELDS,
   STATUS_COPY,
   UpdateApplicantSchema,
   UploadDocumentMetaSchema,
   acceptsSubmissions,
   clientMessagesFor,
+  decryptJson,
+  documentTypesForStep,
   encryptJson,
   identityFingerprint,
   invalid,
+  missingApplicantFields,
   notFound,
   outstandingSteps,
   parseLevelSteps,
+  stepLabel,
   transition,
 } from '@kyc/core';
 import { documentStorageKey } from '@kyc/adapters';
@@ -268,9 +275,40 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const info = body.info ?? {};
+
+    // The sealed fields have to be merged, not overwritten: the blob is one
+    // ciphertext, so re-encrypting only what this request sent would silently
+    // drop everything the applicant supplied earlier. These were accepted by the
+    // schema and then dropped entirely, so an address sent here returned 200 and
+    // went nowhere — which also left the standard level's address requirement
+    // impossible to satisfy through the API.
+    const piiKey = process.env.PII_ENCRYPTION_KEY;
+    const sealedUpdates = {
+      ...(info.address !== undefined ? { address: info.address } : {}),
+      ...(info.taxId !== undefined ? { taxId: info.taxId } : {}),
+      ...(info.placeOfBirth !== undefined ? { placeOfBirth: info.placeOfBirth } : {}),
+      ...(info.occupation !== undefined ? { occupation: info.occupation } : {}),
+      ...(info.employerName !== undefined ? { employerName: info.employerName } : {}),
+      ...(info.sourceOfFunds !== undefined ? { sourceOfFunds: info.sourceOfFunds } : {}),
+    };
+    let piiCiphertext: string | undefined;
+    if (piiKey && Object.keys(sealedUpdates).length > 0) {
+      let existing: Record<string, unknown> = {};
+      if (applicant.piiCiphertext) {
+        try {
+          existing = decryptJson<Record<string, unknown>>(applicant.piiCiphertext, piiKey);
+        } catch {
+          // An unreadable blob is not a reason to refuse new data; the new values
+          // are written and the unreadable remainder is lost either way.
+        }
+      }
+      piiCiphertext = encryptJson({ ...existing, ...sealedUpdates }, piiKey);
+    }
+
     const updated = await prisma.applicant.update({
       where: { id: applicant.id },
       data: {
+        ...(piiCiphertext !== undefined ? { piiCiphertext } : {}),
         ...(info.firstName !== undefined ? { firstName: info.firstName } : {}),
         ...(info.lastName !== undefined ? { lastName: info.lastName } : {}),
         ...(info.dob !== undefined ? { dob: new Date(info.dob) } : {}),
@@ -466,15 +504,50 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
     const usable = new Set(
       applicant.documents
         .filter((d) => d.status !== 'REJECTED' && d.status !== 'SUPERSEDED')
-        .map((d) => d.type),
+        .map((d) => d.type as string),
     );
-    const completed = new Set(
-      steps
-        .filter((s) =>
-          (s.config.acceptedDocumentTypes ?? []).some((t) => usable.has(t as never)),
-        )
-        .map((s) => s.id),
+
+    // Address and the other sealed fields only need unsealing if a step asks
+    // for one of them.
+    const declared: Record<string, unknown> = {
+      firstName: applicant.firstName,
+      lastName: applicant.lastName,
+      dob: applicant.dob,
+      country: applicant.country,
+      nationality: applicant.nationality,
+      email: applicant.email,
+      phone: applicant.phone,
+    };
+    const needsPii = steps.some((s) =>
+      (s.config.requiredFields ?? DEFAULT_REQUIRED_APPLICANT_FIELDS).some((f) =>
+        PII_BLOB_FIELDS.includes(f),
+      ),
     );
+    if (needsPii && applicant.piiCiphertext && process.env.PII_ENCRYPTION_KEY) {
+      try {
+        Object.assign(
+          declared,
+          decryptJson<Record<string, unknown>>(
+            applicant.piiCiphertext,
+            process.env.PII_ENCRYPTION_KEY,
+          ),
+        );
+      } catch {
+        // Unreadable is not the same as unsupplied; the missing-field path reports it.
+      }
+    }
+
+    const isSatisfied = (s: (typeof steps)[number]): boolean => {
+      if (s.type === 'APPLICANT_DATA') {
+        const required = s.config.requiredFields ?? DEFAULT_REQUIRED_APPLICANT_FIELDS;
+        return missingApplicantFields(required, declared).length === 0;
+      }
+      const accepted = documentTypesForStep(s);
+      // A step no document can satisfy is not satisfied by having none.
+      return accepted.length > 0 && accepted.some((t) => usable.has(t));
+    };
+
+    const completed = new Set(steps.filter(isSatisfied).map((s) => s.id));
 
     return {
       levelName: applicant.level.name,
@@ -482,15 +555,20 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
       outstanding: outstandingSteps(steps, completed).map((s) => ({
         id: s.id,
         type: s.type,
-        label: s.label ?? s.type,
-        acceptedDocumentTypes: s.config.acceptedDocumentTypes ?? [],
+        label: stepLabel(s),
+        acceptedDocumentTypes: documentTypesForStep(s),
         requireBothSides: s.config.requireBothSides ?? false,
       })),
       allSteps: steps.map((s) => ({
         id: s.id,
         type: s.type,
+        label: stepLabel(s),
         required: s.required,
         satisfied: completed.has(s.id),
+        // Screening and device intelligence are things we do, not things the
+        // applicant does. A progress list that shows them leaves the applicant
+        // looking at boxes they can never tick.
+        applicantFacing: APPLICANT_FACING_STEPS.has(s.type),
       })),
     };
   });
