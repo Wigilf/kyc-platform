@@ -1,5 +1,6 @@
 import { NavLink, Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
 import { clearSession, loadSession } from './api';
+import { useApi } from './components';
 import Applicants from './pages/Applicants';
 import ApplicantDetail from './pages/ApplicantDetail';
 import Cases from './pages/Cases';
@@ -19,6 +20,9 @@ const NAV = [
 function Shell() {
   const navigate = useNavigate();
   const session = loadSession();
+  // Hooks must run unconditionally, so this is above the redirect; with no
+  // session the request 401s and the client redirects anyway.
+  const me = useApi<{ simulated?: boolean }>(session ? '/v1/me' : null);
   if (!session) return <Navigate to="/login" replace />;
 
   function signOut() {
@@ -52,6 +56,13 @@ function Shell() {
         </div>
       </nav>
       <main className="main">
+        {me.data?.simulated && (
+          <div className="sim-banner" role="status">
+            <strong>Simulated verification.</strong> Document, liveness and face-match
+            checks are generated, not performed. A pass here is not evidence that
+            anyone's identity was verified.
+          </div>
+        )}
         <Outlet />
       </main>
     </div>

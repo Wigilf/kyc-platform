@@ -44,6 +44,8 @@ const COPY: Record<string, string> = {
   rejectedFinalBody: 'Our team has reviewed this and the decision is final.',
   cameraDenied: 'Camera unavailable, so please choose a file instead.',
   genericError: 'Something went wrong. Please try again.',
+  simulated:
+    'Demonstration only — documents are not really checked. Do not upload a real ID.',
 };
 
 const SIDE_LABEL: Record<string, string> = {
@@ -162,6 +164,12 @@ export function mountWidget(options: KycMountOptions): KycHandle {
   function render() {
     if (destroyed) return;
     card.replaceChildren();
+
+    // Shown on every screen, not just the first. Someone who lands mid-flow is
+    // exactly the person who needs to know nothing here is a real check.
+    if (requirements?.simulated) {
+      card.append(el('div', { class: 'note sim' }, COPY.simulated!));
+    }
 
     if (notice) {
       card.append(el('div', { class: `note ${notice.tone}` }, notice.text));

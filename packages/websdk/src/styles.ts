@@ -21,6 +21,8 @@ export const STYLES = /* css */ `
   --kyc-ok-bg: #e3f4ea;
   --kyc-err: #b3261e;
   --kyc-err-bg: #fbe6e5;
+  --kyc-warn: #96690b;
+  --kyc-warn-bg: #fbf1d9;
   --kyc-radius: 10px;
   --kyc-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
@@ -43,6 +45,8 @@ export const STYLES = /* css */ `
     --kyc-ok-bg: #17301f;
     --kyc-err: #f28b82;
     --kyc-err-bg: #3a1f1d;
+    --kyc-warn: #e3b341;
+    --kyc-warn-bg: #322813;
   }
 }
 
@@ -124,6 +128,11 @@ video, .shot {
   margin-bottom: 14px;
 }
 .note.err { background: var(--kyc-err-bg); color: var(--kyc-err); }
+.note.sim {
+  background: var(--kyc-warn-bg, #fbf1d9);
+  color: var(--kyc-warn, #96690b);
+  font-weight: 600;
+}
 .note.ok  { background: var(--kyc-ok-bg);  color: var(--kyc-ok); }
 
 .reasons { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; }

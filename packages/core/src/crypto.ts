@@ -5,6 +5,7 @@ import {
   createHmac,
   randomBytes,
   randomUUID,
+  scryptSync,
   timingSafeEqual,
 } from 'node:crypto';
 
@@ -212,4 +213,76 @@ export function auditHash(
 ): string {
   const canonical = JSON.stringify(entry, Object.keys(entry).sort());
   return sha256(`${prevHash ?? 'genesis'}|${canonical}`);
+}
+
+// ---------------------------------------------------------------------------
+// Operator passwords
+// ---------------------------------------------------------------------------
+
+/**
+ * Password hashing.
+ *
+ * A bare SHA-256 of the password — which is what this used to be — is
+ * unsalted and fast, so identical passwords collide visibly and an attacker
+ * with the table can test billions of candidates a second. scrypt is
+ * deliberately slow and memory-hard, and every hash carries its own salt.
+ *
+ * Node's own crypto is enough here; a dependency for this would be a liability
+ * of its own.
+ *
+ * Format: `scrypt$N$r$p$salt$hash`, all base64. Parameters travel with the hash
+ * so they can be raised later without invalidating existing passwords.
+ */
+const SCRYPT_N = 16384; // ~16MB, roughly 50-100ms per hash
+const SCRYPT_r = 8;
+const SCRYPT_p = 1;
+const SCRYPT_KEYLEN = 32;
+
+export function hashPassword(plain: string): string {
+  const salt = randomBytes(16);
+  const derived = scryptSync(plain.normalize('NFKC'), salt, SCRYPT_KEYLEN, {
+    N: SCRYPT_N,
+    r: SCRYPT_r,
+    p: SCRYPT_p,
+    // scrypt needs headroom above N*r*128 or Node refuses to run.
+    maxmem: 64 * 1024 * 1024,
+  });
+  return [
+    'scrypt',
+    SCRYPT_N,
+    SCRYPT_r,
+    SCRYPT_p,
+    salt.toString('base64'),
+    derived.toString('base64'),
+  ].join('$');
+}
+
+export interface PasswordCheck {
+  ok: boolean;
+  /** True when the stored hash uses a superseded scheme and should be replaced. */
+  needsRehash: boolean;
+}
+
+export function verifyPassword(plain: string, stored: string | null): PasswordCheck {
+  if (!stored) return { ok: false, needsRehash: false };
+
+  if (stored.startsWith('scrypt$')) {
+    const [, n, r, p, salt, hash] = stored.split('$');
+    if (!n || !r || !p || !salt || !hash) return { ok: false, needsRehash: false };
+    const expected = Buffer.from(hash, 'base64');
+    const derived = scryptSync(plain.normalize('NFKC'), Buffer.from(salt, 'base64'), expected.length, {
+      N: Number(n),
+      r: Number(r),
+      p: Number(p),
+      maxmem: 64 * 1024 * 1024,
+    });
+    const ok = derived.length === expected.length && timingSafeEqual(derived, expected);
+    // Re-hash if the stored cost is below what we now use.
+    return { ok, needsRehash: ok && Number(n) < SCRYPT_N };
+  }
+
+  // Legacy unsalted SHA-256. Accepted so existing accounts keep working, and
+  // upgraded in place on the next successful sign-in.
+  const ok = safeEqual(sha256(plain), stored);
+  return { ok, needsRehash: ok };
 }

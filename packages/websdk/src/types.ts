@@ -52,6 +52,8 @@ export interface Requirement {
 export interface RequirementsResponse {
   levelName: string;
   status: string;
+  /** True when no real document or biometric provider is wired in. */
+  simulated?: boolean;
   outstanding: Requirement[];
   allSteps: Array<{
     id: string;

@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/dist
+**/generated
+**/*.tsbuildinfo
+.git
+.data
+.env
+.env.local
+apps/dashboard/dist
+coverage
+*.log

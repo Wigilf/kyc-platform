@@ -1,0 +1,118 @@
+# Render blueprint.
+#
+# Four resources: the API (which also runs the queue workers in-process), a
+# Postgres database, a Key Value store for the queues, and the operator
+# dashboard as a static site.
+#
+# Everything here is on Render's free tier, which has consequences worth
+# knowing before you share the URL:
+#
+#   - Free web services sleep after 15 minutes idle and take ~50s to wake. The
+#     first request after a quiet period will feel broken; it is not.
+#   - Free Postgres expires after 30 days. Data is lost when it does.
+#   - There is no free background-worker service type, which is why the API
+#     runs the queue consumers itself via RUN_WORKER_IN_PROCESS.
+#
+# Upgrading the API and database to a paid plan removes all three.
+
+services:
+  # --- API + queue workers -------------------------------------------------
+  - name: kyc-api
+    type: web
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    # Migrations run before the new instance takes traffic. The seed is
+    # idempotent and gives the deployment its demo tenant and operators.
+    preDeployCommand: >-
+      node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kyc-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: kyc-cache
+          type: keyvalue
+          property: connectionString
+      # Generated once by Render and then held constant. Rotating
+      # PII_ENCRYPTION_KEY makes existing encrypted addresses unreadable.
+      - key: APP_SECRET
+        generateValue: true
+      - key: WEBHOOK_SIGNING_SECRET
+        generateValue: true
+      # 64 hex characters. generateValue produces base64, which the key parser
+      # rejects, so this one is set manually — see DEPLOY.md.
+      - key: PII_ENCRYPTION_KEY
+        sync: false
+      - key: RUN_WORKER_IN_PROCESS
+        value: 'true'
+      - key: ADAPTER_MODE
+        value: mock
+      - key: STORAGE_DRIVER
+        value: local
+      - key: STORAGE_LOCAL_DIR
+        value: /tmp/uploads
+      - key: LOG_LEVEL
+        value: info
+      # The dashboard is a separate origin, so it has to be allowed explicitly.
+      - key: CORS_ORIGINS
+        fromService:
+          name: kyc-dashboard
+          type: web
+          property: host
+      - key: PUBLIC_API_URL
+        fromService:
+          name: kyc-api
+          type: web
+          property: host
+
+  # --- Key Value store for BullMQ -----------------------------------------
+  - name: kyc-cache
+    type: keyvalue
+    plan: free
+    region: frankfurt
+    # Reachable only from services inside this Render account.
+    ipAllowList: []
+    # The queues must not silently drop jobs under memory pressure; failing the
+    # write is recoverable, an evicted job is not.
+    maxmemoryPolicy: noeviction
+
+  # --- Operator dashboard --------------------------------------------------
+  - name: kyc-dashboard
+    type: web
+    runtime: static
+    buildCommand: npm ci && npm run build:dashboard
+    staticPublishPath: ./apps/dashboard/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          name: kyc-api
+          type: web
+          property: host
+    routes:
+      # Client-side routing: every path has to reach index.html.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+
+databases:
+  - name: kyc-db
+    plan: free
+    region: frankfurt
+    postgresMajorVersion: '16'

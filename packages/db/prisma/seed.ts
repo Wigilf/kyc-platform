@@ -2,9 +2,9 @@ import {
   ALL_DEFAULT_RULES,
   encryptJson,
   generateApiKey,
+  hashPassword,
   nameTokens,
   newSecret,
-  sha256,
 } from '../../core/src/index.js';
 import { prisma, provisionTenant } from '../src/index.js';
 
@@ -53,9 +53,9 @@ async function main() {
         email: user.email,
         name: user.name,
         role: user.role,
-        passwordHash: sha256(password),
+        passwordHash: hashPassword(password),
       },
-      update: { role: user.role, passwordHash: sha256(password) },
+      update: { role: user.role, passwordHash: hashPassword(password) },
     });
   }
 

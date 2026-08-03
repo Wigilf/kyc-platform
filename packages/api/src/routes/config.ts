@@ -36,16 +36,22 @@ const configRoutes: FastifyPluginAsync = async (app) => {
         include: { tenant: { select: { id: true, name: true, slug: true } } },
       });
 
-      const { sha256, safeEqual } = await import('@kyc/core');
+      const { hashPassword, verifyPassword } = await import('@kyc/core');
       // Uniform failure: distinguishing "no such user" from "wrong password" is a
       // user-enumeration oracle.
-      if (!user?.passwordHash || !safeEqual(sha256(password), user.passwordHash)) {
+      const check = verifyPassword(password, user?.passwordHash ?? null);
+      if (!user || !check.ok) {
         throw invalid('Invalid credentials');
       }
 
       await prisma.user.update({
         where: { id: user.id },
-        data: { lastLoginAt: new Date() },
+        data: {
+          lastLoginAt: new Date(),
+          // Accounts created under the old unsalted scheme are upgraded the
+          // first time their owner signs in, without anyone having to reset.
+          ...(check.needsRehash ? { passwordHash: hashPassword(password) } : {}),
+        },
       });
 
       return {
@@ -65,7 +71,14 @@ const configRoutes: FastifyPluginAsync = async (app) => {
       where: { id: caller.tenantId },
       select: { id: true, name: true, slug: true, industry: true, homeCountry: true },
     });
-    return { caller, tenant };
+    return {
+      caller,
+      tenant,
+      // Drives the dashboard's banner: a reviewer must not read a simulated
+      // pass as evidence that a document was checked.
+      adapterMode: process.env.ADAPTER_MODE ?? 'mock',
+      simulated: (process.env.ADAPTER_MODE ?? 'mock') !== 'live',
+    };
   });
 
   // --- Levels ---

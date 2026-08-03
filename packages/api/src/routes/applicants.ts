@@ -552,6 +552,10 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
     return {
       levelName: applicant.level.name,
       status: applicant.reviewStatus,
+      // The widget shows this to the applicant. Someone being asked to
+      // photograph their passport is entitled to know whether anything will
+      // actually examine it.
+      simulated: (process.env.ADAPTER_MODE ?? 'mock') !== 'live',
       outstanding: outstandingSteps(steps, completed).map((s) => ({
         id: s.id,
         type: s.type,

@@ -27,7 +27,16 @@ import {
  * loosest.
  */
 
-async function main() {
+/**
+ * Starts the queue consumers.
+ *
+ * Exported so a single process can host the API and the workers together.
+ * Render's free tier has no background-worker service type, and for small
+ * volumes one process is a legitimate topology anyway — the tradeoff is that
+ * the two can no longer be scaled apart, and a slow job competes with request
+ * handling for the event loop.
+ */
+export async function startWorkers() {
   console.log('[worker] starting');
 
   const workers = [
@@ -209,7 +218,7 @@ const isEntrypoint =
     process.argv[1].endsWith('worker/dist/index.js'));
 
 if (isEntrypoint) {
-  main().catch((error) => {
+  startWorkers().catch((error) => {
     console.error('[worker] fatal', error);
     process.exit(1);
   });

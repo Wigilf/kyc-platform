@@ -63,10 +63,28 @@ export async function buildServer() {
 
   await app.register(cors, {
     origin: (origin, cb) => {
-      const allowed = (process.env.CORS_ORIGINS ?? '').split(',').filter(Boolean);
+      // Entries may be full origins or bare hostnames: Render supplies the
+      // dashboard's host without a scheme, while the browser always sends a
+      // full origin, so compare on hostname to stop the two missing each other.
+      const allowed = (process.env.CORS_ORIGINS ?? '')
+        .split(',')
+        .map((entry) => entry.trim().replace(/\/$/, ''))
+        .filter(Boolean)
+        .map((entry) => (/^https?:\/\//.test(entry) ? entry : `https://${entry}`));
+
       // No configured list means development: allow anything, including the
       // no-origin case (curl, server-to-server).
-      if (allowed.length === 0 || !origin || allowed.includes(origin)) return cb(null, true);
+      if (allowed.length === 0 || !origin) return cb(null, true);
+
+      const hostOf = (value: string) => {
+        try {
+          return new URL(value).host;
+        } catch {
+          return value;
+        }
+      };
+      const requested = hostOf(origin);
+      if (allowed.some((entry) => hostOf(entry) === requested)) return cb(null, true);
       cb(new Error('Origin not allowed'), false);
     },
     credentials: true,
@@ -277,7 +295,7 @@ export async function buildServer() {
         description:
           'Identity verification, AML screening, KYB, transaction monitoring, and agentic support.',
       },
-      servers: [{ url: `http://localhost:${process.env.API_PORT ?? 4000}` }],
+      servers: [{ url: process.env.PUBLIC_API_URL ?? `http://localhost:${process.env.PORT ?? process.env.API_PORT ?? 4000}` }],
       // A route inventory rather than a hand-maintained spec: an inaccurate spec
       // is worse than an honest list.
       'x-routes': routes,
@@ -309,9 +327,47 @@ export async function buildServer() {
   return app;
 }
 
+/**
+ * Refuses to start in production with the development placeholders in place.
+ *
+ * These are real secrets: APP_SECRET signs the tokens that authorise access to
+ * an applicant's record, and PII_ENCRYPTION_KEY is the only thing standing
+ * between a database dump and every stored address. Shipping the committed
+ * defaults would make both decorative, and it is the kind of mistake that is
+ * invisible until it matters — so it fails loudly at boot instead.
+ */
+export function assertProductionSecrets(env = process.env): void {
+  if ((env.NODE_ENV ?? 'development') !== 'production') return;
+
+  const problems: string[] = [];
+  const check = (name: string, value: string | undefined, weak: (v: string) => boolean) => {
+    if (!value) problems.push(`${name} is not set`);
+    else if (weak(value)) problems.push(`${name} is still a development placeholder`);
+  };
+
+  check('APP_SECRET', env.APP_SECRET, (v) => v.includes('change-me') || v.length < 32);
+  check('WEBHOOK_SIGNING_SECRET', env.WEBHOOK_SIGNING_SECRET, (v) => v.includes('change-me') || v.length < 16);
+  check('PII_ENCRYPTION_KEY', env.PII_ENCRYPTION_KEY, (v) => /^0+$/.test(v) || v.length !== 64);
+  check('DATABASE_URL', env.DATABASE_URL, () => false);
+
+  if (problems.length) {
+    throw new Error(
+      `Refusing to start in production:\n  - ${problems.join('\n  - ')}\n\n` +
+        'Generate strong values, e.g.\n' +
+        '  APP_SECRET=$(openssl rand -base64 48)\n' +
+        '  WEBHOOK_SIGNING_SECRET=$(openssl rand -base64 32)\n' +
+        '  PII_ENCRYPTION_KEY=$(openssl rand -hex 32)\n\n' +
+        'Note that changing PII_ENCRYPTION_KEY makes existing encrypted data unreadable.',
+    );
+  }
+}
+
 async function main() {
+  assertProductionSecrets();
+
   const app = await buildServer();
-  const port = Number(process.env.API_PORT ?? 4000);
+  // PORT is what most hosts inject; API_PORT stays as the local convention.
+  const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
   const host = process.env.API_HOST ?? '0.0.0.0';
 
   const shutdown = async (signal: string) => {
@@ -325,6 +381,15 @@ async function main() {
 
   await app.listen({ port, host });
   app.log.info(`API listening on http://${host}:${port} (docs: /openapi.json)`);
+
+  // One process hosting both. See startWorkers() for why this exists and what
+  // it costs; a deployment that can afford a separate worker should leave this
+  // unset and run `@kyc/worker` on its own.
+  if (process.env.RUN_WORKER_IN_PROCESS === 'true') {
+    const { startWorkers } = await import('@kyc/worker');
+    await startWorkers();
+    app.log.info('queue workers started in-process (RUN_WORKER_IN_PROCESS=true)');
+  }
 }
 
 const isEntrypoint =

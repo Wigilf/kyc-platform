@@ -8,6 +8,24 @@
 
 const TOKEN_KEY = 'kyc.session';
 
+/**
+ * Where the API lives.
+ *
+ * Empty in development, where Vite proxies /v1 to the API on the same origin.
+ * In production the dashboard is a static site on its own domain, so the origin
+ * has to be baked in at build time.
+ */
+function normaliseBase(raw: string | undefined): string {
+  const value = (raw ?? '').trim().replace(/\/$/, '');
+  if (!value) return '';
+  // Render's `fromService … property: host` yields a bare hostname. Left as-is
+  // that produces a relative URL and every request silently hits the dashboard
+  // instead of the API.
+  return /^https?:\/\//.test(value) ? value : `https://${value}`;
+}
+
+const API_BASE = normaliseBase(import.meta.env.VITE_API_BASE_URL);
+
 export interface Session {
   token: string;
   user: { id: string; name: string | null; email: string; role: string };
@@ -50,7 +68,7 @@ async function request<T>(
   const session = loadSession();
   const { body, ...rest } = init;
 
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE}${path}`, {
     ...rest,
     headers: {
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
