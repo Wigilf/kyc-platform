@@ -1,13 +1,12 @@
 import {
   ALL_DEFAULT_RULES,
-  LEVEL_TEMPLATES,
   encryptJson,
   generateApiKey,
   nameTokens,
   newSecret,
   sha256,
 } from '../../core/src/index.js';
-import { PrismaClient } from '../generated/client/index.js';
+import { prisma, provisionTenant } from '../src/index.js';
 
 /**
  * Seed data.
@@ -19,23 +18,20 @@ import { PrismaClient } from '../generated/client/index.js';
  * interesting paths (clean approve, blurry retry, forged reject, sanctions hit).
  */
 
-const prisma = new PrismaClient();
-
 async function main() {
   console.log('Seeding…');
 
-  // --- Tenant ---
-  const tenant = await prisma.tenant.upsert({
-    where: { slug: 'acme-fintech' },
-    create: {
-      name: 'Acme Fintech',
-      slug: 'acme-fintech',
-      homeCountry: 'GBR',
-      industry: 'FINTECH',
-      dataResidency: 'eu',
-    },
-    update: {},
+  // --- Tenant, with the levels, queues and rules every tenant needs ---
+  // Shared with the test suite, which stands up a tenant of its own the same
+  // way, so the two cannot drift apart.
+  const tenant = await provisionTenant({
+    name: 'Acme Fintech',
+    slug: 'acme-fintech',
+    homeCountry: 'GBR',
+    industry: 'FINTECH',
+    dataResidency: 'eu',
   });
+  console.log(`  levels, queues, rules: ${ALL_DEFAULT_RULES.length} rules`);
 
   // --- Operators, one per role so the RBAC boundaries can actually be tested ---
   const password = 'demo1234';
@@ -81,90 +77,6 @@ async function main() {
     });
     apiCredentials = { keyId: generated.keyId, secret: generated.secret };
   }
-
-  // --- Levels from the built-in templates ---
-  for (const template of Object.values(LEVEL_TEMPLATES)) {
-    const existing = await prisma.verificationLevel.findFirst({
-      where: { tenantId: tenant.id, name: template.name },
-    });
-    if (existing) continue;
-    await prisma.verificationLevel.create({
-      data: {
-        tenantId: tenant.id,
-        name: template.name,
-        displayName: template.displayName,
-        description: template.description,
-        subjectType: template.subjectType,
-        version: 1,
-        steps: template.steps as never,
-        allowedCountries: template.allowedCountries,
-        blockedCountries: template.blockedCountries,
-        autoApprove: template.autoApprove,
-        autoReject: template.autoReject,
-        manualReviewScore: template.manualReviewScore,
-        autoRejectScore: template.autoRejectScore,
-        reverifyAfterDays: template.reverifyAfterDays,
-        screeningConfig: template.screeningConfig as never,
-      },
-    });
-  }
-
-  // --- Queues ---
-  const queues = [
-    { name: 'manual-review', description: 'General verification review', isDefault: true, sla: 1440 },
-    { name: 'aml-hits', description: 'Sanctions, PEP, and adverse media hits', isDefault: false, sla: 480 },
-    { name: 'fraud-review', description: 'Suspected fraud and duplicate accounts', isDefault: false, sla: 720 },
-    { name: 'edd-review', description: 'Enhanced due diligence', isDefault: false, sla: 2880 },
-    { name: 'kyb-review', description: 'Business verification and UBO resolution', isDefault: false, sla: 2880 },
-    { name: 'transaction-alerts', description: 'Transaction monitoring alerts', isDefault: false, sla: 240 },
-    { name: 'complaints', description: 'Complaints and appeals', isDefault: false, sla: 480 },
-  ];
-  for (const queue of queues) {
-    await prisma.queue.upsert({
-      where: { tenantId_name: { tenantId: tenant.id, name: queue.name } },
-      create: {
-        tenantId: tenant.id,
-        name: queue.name,
-        description: queue.description,
-        isDefault: queue.isDefault,
-        slaFirstResponseMinutes: Math.round(queue.sla / 4),
-        slaResolutionMinutes: queue.sla,
-      },
-      update: {},
-    });
-  }
-
-  // --- Rules ---
-  for (const rule of ALL_DEFAULT_RULES) {
-    await prisma.rule.upsert({
-      where: { tenantId_name: { tenantId: tenant.id, name: rule.name } },
-      create: {
-        tenantId: tenant.id,
-        name: rule.name,
-        description: rule.description,
-        scope: rule.scope,
-        priority: rule.priority,
-        isActive: rule.isActive,
-        isShadow: rule.isShadow,
-        conditions: rule.conditions as never,
-        actions: rule.actions as never,
-        versions: {
-          create: {
-            version: 1,
-            conditions: rule.conditions as never,
-            actions: rule.actions as never,
-            changeNote: 'Seeded default',
-          },
-        },
-      },
-      update: {
-        conditions: rule.conditions as never,
-        actions: rule.actions as never,
-        priority: rule.priority,
-      },
-    });
-  }
-  console.log(`  rules: ${ALL_DEFAULT_RULES.length}`);
 
   // --- Watchlist corpus ---
   // Chosen so screening has something real to do: an exact sanctions match, a

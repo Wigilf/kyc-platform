@@ -63,3 +63,11 @@ export {
   type AuditChainBreak,
   type AuditEntryInput,
 } from './audit.js';
+
+export {
+  provisionTenant,
+  provisionLevels,
+  provisionQueues,
+  provisionRules,
+  type ProvisionTenantInput,
+} from './provision.js';

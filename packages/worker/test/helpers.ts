@@ -1,14 +1,19 @@
 import { documentStorageKey } from '@kyc/adapters';
-import { prisma } from '@kyc/db';
+import { prisma, provisionTenant } from '@kyc/db';
 import { adaptersFor } from '../src/context.js';
 
 /**
  * Test fixtures.
  *
- * These build their own applicants rather than reusing the seeded demo ones:
- * the tests mutate state, and a run that leaves demo-clean-001 rejected makes
- * the demo lie. Everything created here is namespaced `test-` and removed
- * afterwards.
+ * The suite runs against a tenant of its own, provisioned from the same
+ * templates the seed uses, and drops it afterwards.
+ *
+ * Two reasons. Mutating the demo tenant makes the demo lie — a run that leaves
+ * demo-clean-001 rejected is worse than no demo. And the audit log cannot be
+ * cleaned up selectively: deleting an entry from the middle of a hash chain
+ * breaks it by design, which is the whole point. A tenant of our own gets its
+ * own chain, and `AuditLog.tenantId` cascades, so dropping the tenant takes the
+ * chain with it and leaves the demo's intact.
  */
 
 const PNG_1X1 = Buffer.from(
@@ -16,8 +21,24 @@ const PNG_1X1 = Buffer.from(
   'base64',
 );
 
-export async function testTenant() {
-  return prisma.tenant.findFirstOrThrow({ where: { slug: 'acme-fintech' } });
+export const TEST_TENANT_SLUG = 'kyc-test-suite';
+
+/**
+ * The suite's tenant, created on first use.
+ *
+ * Provisioning is ~60 upserts, so it is done once per process and memoised
+ * rather than per fixture.
+ */
+let provisioned: Promise<{ id: string }> | null = null;
+
+export function testTenant(): Promise<{ id: string }> {
+  provisioned ??= provisionTenant({
+    slug: TEST_TENANT_SLUG,
+    name: 'KYC Test Suite',
+    homeCountry: 'GBR',
+    industry: 'FINTECH',
+  });
+  return provisioned;
 }
 
 export async function testLevel(tenantId: string) {
@@ -135,17 +156,12 @@ export async function createApplicant(slug: string, opts: FixtureOptions = {}) {
   return { applicant, tenant, level };
 }
 
-/** Removes every record these tests created. Relations cascade off Applicant. */
+/**
+ * Drops the suite's tenant, and with it everything the tests created —
+ * applicants, checks, cases, screening runs, and the tenant's own audit chain,
+ * all by cascade. The demo tenant is never touched.
+ */
 export async function cleanupTestData() {
-  const applicants = await prisma.applicant.findMany({
-    where: { externalUserId: { startsWith: 'test-' } },
-    select: { id: true },
-  });
-  const ids = applicants.map((a) => a.id);
-  if (ids.length) {
-    // Audit entries do not hang off the applicant, and deleting from the middle
-    // of the chain would break it for unrelated entries. They are left in place;
-    // the chain stays valid and the rows are harmless.
-    await prisma.applicant.deleteMany({ where: { id: { in: ids } } });
-  }
+  await prisma.tenant.deleteMany({ where: { slug: TEST_TENANT_SLUG } });
+  provisioned = null;
 }
