@@ -60,6 +60,9 @@ export type Scenario =
   | 'SCREEN_CAPTURE'
   | 'SPOOF'
   | 'FACE_MISMATCH'
+  | 'NAME_MISMATCH'
+  | 'DOB_MISMATCH'
+  | 'STALE_ADDRESS'
   | 'NO_FACE'
   | 'LIVENESS_FAIL'
   | 'UNDERAGE'
@@ -91,7 +94,13 @@ const TRIGGERS: Array<[RegExp, Scenario]> = [
   [/tamper/i, 'TAMPERED'],
   [/screencap|screenshot/i, 'SCREEN_CAPTURE'],
   [/spoof|deepfake|mask/i, 'SPOOF'],
-  [/mismatch/i, 'FACE_MISMATCH'],
+  // The specific triggers must not also fire FACE_MISMATCH, hence the word
+  // boundary on the bare keyword: "namemismatch" has no boundary before
+  // "mismatch", so only the specific pattern matches it.
+  [/name-?mismatch/i, 'NAME_MISMATCH'],
+  [/dob-?mismatch/i, 'DOB_MISMATCH'],
+  [/staleaddress|oldbill/i, 'STALE_ADDRESS'],
+  [/face-?mismatch|selfie-?mismatch|\bmismatch\b/i, 'FACE_MISMATCH'],
   [/noface/i, 'NO_FACE'],
   [/liveness(fail)?/i, 'LIVENESS_FAIL'],
   [/underage|minor/i, 'UNDERAGE'],

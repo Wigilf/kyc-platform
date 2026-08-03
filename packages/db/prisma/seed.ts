@@ -1,6 +1,7 @@
 import {
   ALL_DEFAULT_RULES,
   LEVEL_TEMPLATES,
+  encryptJson,
   generateApiKey,
   nameTokens,
   newSecret,
@@ -400,6 +401,43 @@ async function main() {
     where: { tenantId: tenant.id, name: 'standard-kyc-aml' },
   });
 
+  // Prefixes match the mock geolocation adapter's table so a declared country
+  // and its IP agree.
+  // Either the prefix resolves to the declared country in the mock adapter's
+  // table, or it deliberately matches no prefix at all — in which case the
+  // adapter falls back to the declared country. Both agree; neither invents a
+  // mismatch. (The table has no POL/PRT/BGR/JPN entry, hence the second kind.)
+  const IP_BY_COUNTRY: Record<string, string> = {
+    ITA: '79.11.24.7', // 79. → ITA
+    RUS: '77.88.55.60', // 77. → RUS
+    DEU: '91.64.203.18', // 91. → DEU
+    GBR: '81.2.69.142', // 81. → GBR
+    POL: '83.20.14.9', // no prefix match
+    PRT: '188.80.5.12', // no prefix match
+    BGR: '212.50.11.4', // no prefix match
+    JPN: '126.72.4.18', // no prefix match
+  };
+
+  // The standard level requires an address, and address is PII: it lives in the
+  // envelope-encrypted blob, not a column. Without it every demo applicant fails
+  // the applicant-data step and none of them can be auto-approved.
+  const ADDRESS_BY_COUNTRY: Record<string, string> = {
+    ITA: 'Via Torino 42, 20123 Milano',
+    POL: 'ul. Marszałkowska 15, 00-624 Warszawa',
+    PRT: 'Rua Augusta 88, 1100-053 Lisboa',
+    RUS: 'Tverskaya St 7, 125009 Moscow',
+    BGR: 'bul. Vitosha 21, 1000 Sofia',
+    DEU: 'Friedrichstraße 110, 10117 Berlin',
+    JPN: '2-11-3 Meguro, Tokyo 153-0063',
+  };
+  const piiKey = process.env.PII_ENCRYPTION_KEY;
+  if (!piiKey) {
+    console.warn(
+      '  ! PII_ENCRYPTION_KEY is not set — seeding applicants without an address.\n' +
+        '    The applicant-data step will fail for all of them.',
+    );
+  }
+
   const applicants = [
     {
       externalUserId: 'demo-clean-001',
@@ -481,12 +519,29 @@ async function main() {
         country: applicant.country,
         nationality: applicant.country,
         email: applicant.email,
-        ipAddress: '81.2.69.142',
+        // An IP in the country they declared. A single hard-coded GBR address
+        // gave every non-GBR applicant a permanent geo mismatch, which quietly
+        // added risk to all of them and stopped the clean one auto-approving.
+        // Scenarios that want a mismatch should say so explicitly.
+        ipAddress: IP_BY_COUNTRY[applicant.country] ?? '81.2.69.142',
         userAgent:
           'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1',
         metadata: { seedNote: applicant.note } as never,
+        piiCiphertext:
+          piiKey && ADDRESS_BY_COUNTRY[applicant.country]
+            ? encryptJson({ address: ADDRESS_BY_COUNTRY[applicant.country] }, piiKey)
+            : null,
       },
-      update: {},
+      // Re-seeding leaves an existing applicant's own data alone, but the IP and
+      // address are scenario configuration rather than applicant-supplied input,
+      // so they are refreshed.
+      update: {
+        ipAddress: IP_BY_COUNTRY[applicant.country] ?? '81.2.69.142',
+        piiCiphertext:
+          piiKey && ADDRESS_BY_COUNTRY[applicant.country]
+            ? encryptJson({ address: ADDRESS_BY_COUNTRY[applicant.country] }, piiKey)
+            : null,
+      },
     });
   }
   console.log(`  demo applicants: ${applicants.length}`);

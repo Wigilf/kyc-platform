@@ -150,7 +150,7 @@ export class StubAgentRuntime implements AgentRuntime {
       const payload = kb.output as { results?: Array<{ title: string; excerpt: string }> };
       const article = payload?.results?.[0];
       if (article) {
-        parts.push('', `This may help — ${article.title}: ${article.excerpt.slice(0, 240)}`);
+        parts.push('', `This may help — ${article.title}: ${excerpt(article.excerpt, 240)}`);
       }
     }
 
@@ -199,4 +199,18 @@ export class StubAgentRuntime implements AgentRuntime {
       usage: { inputTokens: 0, outputTokens: 0, model: 'stub', runtime: 'stub' },
     };
   }
+}
+
+/**
+ * Trims to a length without cutting a word in half.
+ *
+ * The applicant sees this text verbatim, and a reply that stops mid-word reads
+ * as a broken system rather than a truncated quote.
+ */
+function excerpt(text: string, max: number): string {
+  const clean = text.trim();
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[,;:.\s]+$/, '')}…`;
 }

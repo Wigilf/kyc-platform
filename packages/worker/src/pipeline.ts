@@ -3,6 +3,7 @@ import {
   buildApplicantFacts,
   calculateAge,
   daysUntil,
+  decryptJson,
   deriveRiskFactors,
   docNumberHash,
   evaluateRules,
@@ -84,7 +85,10 @@ export async function runVerificationPipeline(job: VerificationJob): Promise<{
       riskContribution: 100,
       provider: 'internal',
     });
-    return finalize(applicant.id, job.tenantId, { forceReject: ['PROHIBITED_COUNTRY'] });
+    return finalize(applicant.id, job.tenantId, {
+      forceReject: ['PROHIBITED_COUNTRY'],
+      checksRun: 1,
+    });
   }
 
   const waves = planSteps({ steps });
@@ -115,7 +119,7 @@ export async function runVerificationPipeline(job: VerificationJob): Promise<{
     }
   }
 
-  return finalize(applicant.id, job.tenantId, {});
+  return finalize(applicant.id, job.tenantId, { checksRun });
 }
 
 type ApplicantWithRelations = Awaited<
@@ -156,6 +160,8 @@ function checkTypeForStep(step: StepDefinition): string {
       return 'WALLET_SCREENING';
     case 'COMPANY_DATA':
       return 'COMPANY_REGISTRY';
+    case 'APPLICANT_DATA':
+      return 'APPLICANT_DATA';
     default:
       return 'MANUAL';
   }
@@ -199,6 +205,8 @@ async function runStep(
       return runContactStep(step, applicant, adapters, ctx);
     case 'PROOF_OF_ADDRESS':
       return runProofOfAddressStep(step, applicant, adapters, ctx);
+    case 'APPLICANT_DATA':
+      return runApplicantDataStep(step, applicant);
     default:
       // Steps with no automated component (video interview, e-signature) are
       // recorded as skipped so the audit shows they were considered.
@@ -263,6 +271,11 @@ async function runDocumentStep(
       })),
       documentType: document.type,
       expectedCountry: document.country ?? applicant.country ?? undefined,
+      declaredIdentity: {
+        firstName: applicant.firstName,
+        lastName: applicant.lastName,
+        dob: applicant.dob ? toDateOnly(applicant.dob) : null,
+      },
     },
     ctx,
   );
@@ -691,6 +704,7 @@ async function runDeviceStep(
       ipAddress: applicant.ipAddress ?? undefined,
       userAgent: applicant.userAgent ?? undefined,
       fingerprint: applicant.devices[0]?.fingerprint,
+      declaredCountry: applicant.country ?? undefined,
     },
     ctx,
   );
@@ -710,25 +724,31 @@ async function runDeviceStep(
     d.ipCountry && applicant.country && d.ipCountry !== applicant.country,
   );
 
-  await prisma.deviceSession.create({
-    data: {
-      applicantId: applicant.id,
-      fingerprint: d.fingerprint,
-      ipAddress: applicant.ipAddress,
-      ipCountry: d.ipCountry,
-      asn: d.asn,
-      isVpn: d.isVpn,
-      isTor: d.isTor,
-      isProxy: d.isProxy,
-      isEmulator: d.isEmulator,
-      isRooted: d.isRooted,
-      geoMismatch,
-      os: d.os,
-      browser: d.browser,
-      timezone: d.timezone,
-      botScore: d.botScore,
-      raw: (result.raw ?? {}) as never,
+  // Upsert, not insert: re-running verification is the same applicant on the
+  // same device, and a row per run would inflate the shared-device signal below
+  // with the applicant's own duplicates.
+  const deviceFields = {
+    ipAddress: applicant.ipAddress,
+    ipCountry: d.ipCountry,
+    asn: d.asn,
+    isVpn: d.isVpn,
+    isTor: d.isTor,
+    isProxy: d.isProxy,
+    isEmulator: d.isEmulator,
+    isRooted: d.isRooted,
+    geoMismatch,
+    os: d.os,
+    browser: d.browser,
+    timezone: d.timezone,
+    botScore: d.botScore,
+    raw: (result.raw ?? {}) as never,
+  };
+  await prisma.deviceSession.upsert({
+    where: {
+      applicantId_fingerprint: { applicantId: applicant.id, fingerprint: d.fingerprint },
     },
+    create: { applicantId: applicant.id, fingerprint: d.fingerprint, ...deviceFields },
+    update: deviceFields,
   });
 
   // How many other applicants share this device? A signup farm shows up here
@@ -848,6 +868,90 @@ async function runContactStep(
   return 1;
 }
 
+/** Fields held in the encrypted PII blob rather than an indexed column. */
+const PII_BLOB_FIELDS = [
+  'address',
+  'taxId',
+  'placeOfBirth',
+  'occupation',
+  'employerName',
+  'sourceOfFunds',
+];
+
+/**
+ * The applicant's own declared data.
+ *
+ * There is no provider to call, but the step is not therefore unsatisfiable:
+ * either the fields the level asks for are present or they are not. Recording it
+ * as SKIPPED — which is what happened before — meant a required APPLICANT_DATA
+ * step could never appear in completedStepIds, so `allRequiredPassed` was false
+ * for every applicant and nobody could ever be auto-approved.
+ */
+async function runApplicantDataStep(
+  step: StepDefinition,
+  applicant: ApplicantWithRelations,
+): Promise<number> {
+  const required = (step.config.requiredFields as string[] | undefined) ?? [
+    'firstName',
+    'lastName',
+    'dob',
+    'country',
+  ];
+
+  // Address and tax id are not columns: they live in the envelope-encrypted PII
+  // blob, so a level that requires them means unsealing it. Decrypt only when the
+  // level actually asks for one of those fields.
+  let sealed: Record<string, unknown> = {};
+  const needsPii = required.some((f) => PII_BLOB_FIELDS.includes(f));
+  if (needsPii && applicant.piiCiphertext) {
+    const key = process.env.PII_ENCRYPTION_KEY;
+    if (key) {
+      try {
+        sealed = decryptJson<Record<string, unknown>>(applicant.piiCiphertext, key);
+      } catch {
+        // A blob we cannot open is not the same as data the applicant withheld.
+        // Leave it empty and let the missing-field path report it.
+      }
+    }
+  }
+
+  const values: Record<string, unknown> = {
+    firstName: applicant.firstName,
+    lastName: applicant.lastName,
+    dob: applicant.dob,
+    country: applicant.country,
+    nationality: applicant.nationality,
+    email: applicant.email,
+    phone: applicant.phone,
+    ...sealed,
+  };
+
+  const missing = required.filter((f) => {
+    const v = values[f];
+    return v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+  });
+
+  await recordCheck(applicant.id, null, {
+    type: 'APPLICANT_DATA',
+    status: 'COMPLETED',
+    result: missing.length ? 'FAIL' : 'PASS',
+    rejectLabels: missing.length ? ['ADDITIONAL_DOCUMENTS_REQUIRED'] : [],
+    riskContribution: 0,
+    provider: 'internal',
+    findings: missing.length
+      ? [
+          {
+            code: 'MISSING_APPLICANT_DATA',
+            severity: 'MEDIUM' as const,
+            message: `The applicant has not supplied: ${missing.join(', ')}.`,
+            detail: { missing },
+          },
+        ]
+      : [],
+  });
+  return 1;
+}
+
 async function runProofOfAddressStep(
   step: StepDefinition,
   applicant: ApplicantWithRelations,
@@ -885,6 +989,11 @@ async function runProofOfAddressStep(
       images: doc.images.map((i) => ({ storageKey: i.storageKey, contentType: i.contentType })),
       documentType: doc.type,
       expectedCountry: applicant.country ?? undefined,
+      declaredIdentity: {
+        firstName: applicant.firstName,
+        lastName: applicant.lastName,
+        dob: applicant.dob ? toDateOnly(applicant.dob) : null,
+      },
     },
     ctx,
   );
@@ -933,7 +1042,7 @@ async function runProofOfAddressStep(
 export async function finalize(
   applicantId: string,
   tenantId: string,
-  options: { forceReject?: string[] } = {},
+  options: { forceReject?: string[]; checksRun?: number } = {},
 ) {
   const applicant = await prisma.applicant.findFirstOrThrow({
     where: { id: applicantId, tenantId },
@@ -953,13 +1062,40 @@ export async function finalize(
   const steps = parseLevelSteps(applicant.level.steps);
   const requiredStepIds = steps.filter((s) => s.required).map((s) => s.id);
 
-  // A required step is satisfied when its check types completed without failing.
-  const checksByType = new Map(applicant.checks.map((c) => [c.type, c]));
+  // Only the *current* state of each check counts.
+  //
+  // The check table accumulates every check ever run, including superseded
+  // attempts. Evaluating the whole history means a failure the applicant has
+  // since corrected keeps rejecting them forever — a resubmission could never
+  // clear a rejection. Keyed by document as well as type, because a single run
+  // legitimately produces one DOCUMENT_OCR per uploaded document and collapsing
+  // those would discard a real result.
+  type CheckRow = (typeof applicant.checks)[number];
+  const latestByKey = new Map<string, CheckRow>();
+  for (const c of applicant.checks) {
+    const key = `${c.type}:${c.documentId ?? ''}`;
+    const seen = latestByKey.get(key);
+    if (!seen || c.createdAt > seen.createdAt) latestByKey.set(key, c);
+  }
+  const latestChecks = [...latestByKey.values()];
+
+  const checksByType = new Map<string, CheckRow>();
+  for (const c of latestChecks) {
+    const seen = checksByType.get(c.type);
+    if (!seen || c.createdAt > seen.createdAt) checksByType.set(c.type, c);
+  }
+
+  // A required step is satisfied when every current check of its type completed
+  // without failing. "Every", not "any": one passing document does not excuse
+  // another that failed.
   const completedStepIds = steps
     .filter((s) => {
       const type = checkTypeForStep(s);
-      const check = checksByType.get(type as never);
-      return check?.status === 'COMPLETED' && check.result !== 'FAIL';
+      const relevant = latestChecks.filter((c) => c.type === type);
+      return (
+        relevant.length > 0 &&
+        relevant.every((c) => c.status === 'COMPLETED' && c.result !== 'FAIL')
+      );
     })
     .map((s) => s.id);
 
@@ -985,7 +1121,12 @@ export async function finalize(
       ipCountry: applicant.ipCountry,
       createdAt: applicant.createdAt,
       tags: applicant.tags,
-      submissionAttempts: applicant.checks.filter((c) => c.type === 'DOCUMENT_OCR').length,
+      // Distinct documents OCR'd, not OCR checks run. Each genuine resubmission
+      // creates a new document; re-running the pipeline over the same one is not
+      // another attempt, and counting it as one inflates the risk score.
+      submissionAttempts: new Set(
+        applicant.checks.filter((c) => c.type === 'DOCUMENT_OCR').map((c) => c.documentId),
+      ).size,
     },
     documents: applicant.documents.map((d) => ({
       type: d.type,
@@ -997,7 +1138,7 @@ export async function finalize(
       mrzVerified: undefined,
       extracted: d.extracted as Record<string, unknown>,
     })) as ApplicantSnapshot['documents'],
-    checks: applicant.checks.map((c) => ({
+    checks: latestChecks.map((c) => ({
       type: c.type,
       status: c.status,
       result: c.result,
@@ -1081,11 +1222,14 @@ export async function finalize(
   });
 
   const forced = options.forceReject ?? [];
+  // Current labels only. Reading the full history means a label from an attempt
+  // the applicant has already corrected still blocks auto-approval, so anyone who
+  // ever failed a check would be stuck in manual review permanently.
   const rejectLabels = [
     ...new Set([
       ...forced,
       ...hints.rejectLabels,
-      ...applicant.checks.flatMap((c) => c.rejectLabels),
+      ...latestChecks.flatMap((c) => c.rejectLabels),
     ]),
   ];
 
@@ -1199,7 +1343,7 @@ export async function finalize(
       queueName: hints.queue,
       riskScore: assessment.score,
       firedRules: evaluation.fired.filter((f) => !f.isShadow).map((f) => f.ruleName),
-      failedChecks: applicant.checks.filter((c) => c.result === 'FAIL').map((c) => c.type),
+      failedChecks: latestChecks.filter((c) => c.result === 'FAIL').map((c) => c.type),
       openHits: openHits.length,
       priority:
         assessment.level === 'CRITICAL' ? 'CRITICAL' : assessment.level === 'HIGH' ? 'HIGH' : 'MEDIUM',
@@ -1238,7 +1382,9 @@ export async function finalize(
     applicantId: applicant.id,
     reviewStatus,
     riskScore: assessment.score,
-    checksRun: applicant.checks.length,
+    // Checks executed by this run, not the applicant's lifetime total — the
+    // latter grows on every re-verification and reads as runaway work.
+    checksRun: options.checksRun ?? latestChecks.length,
     decided: Boolean(decision),
   };
 }

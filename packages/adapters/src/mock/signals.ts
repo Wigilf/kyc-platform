@@ -1,4 +1,4 @@
-import { normalizeEmail, normalizePhone, sha256 } from '@kyc/core';
+import { normalizeCountry, normalizeEmail, normalizePhone, sha256 } from '@kyc/core';
 import type {
   AdapterContext,
   AdapterResult,
@@ -65,15 +65,24 @@ export class MockDeviceAdapter implements DeviceAdapter {
     );
     const findings: Finding[] = [];
 
+    const isTor = hasScenario(scenarios, 'TOR');
+
     const ip = req.ipAddress ?? '';
     const prefixMatch = Object.keys(IP_COUNTRY_BY_PREFIX).find((p) => ip.startsWith(p));
+    // Where the IP itself does not say, an applicant connecting from home is in
+    // the country they declared. Picking at random instead flagged a geo mismatch
+    // on roughly six applicants in seven, including clean ones.
+    const inferredCountry =
+      normalizeCountry(req.declaredCountry) ??
+      seededPick(`${seed}:ipc`, ['GBR', 'DEU', 'FRA', 'NLD', 'ESP', 'ITA', 'USA']);
     const ipCountry = prefixMatch
       ? IP_COUNTRY_BY_PREFIX[prefixMatch]!
       : ip
-        ? seededPick(`${seed}:ipc`, ['GBR', 'DEU', 'FRA', 'NLD', 'ESP', 'ITA', 'USA'])
+        ? // Anonymised traffic genuinely exits somewhere unrelated to the user.
+          isTor || hasScenario(scenarios, 'VPN')
+          ? seededPick(`${seed}:exit`, ['USA', 'NLD', 'PAN', 'SYC', 'ROU'])
+          : inferredCountry
         : null;
-
-    const isTor = hasScenario(scenarios, 'TOR');
     const isVpn = hasScenario(scenarios, 'VPN') || (!isTor && seededFloat(`${seed}:vpn`, 0, 1) > 0.88);
     const isEmulator = hasScenario(scenarios, 'EMULATOR');
 
@@ -122,7 +131,17 @@ export class MockDeviceAdapter implements DeviceAdapter {
       data: {
         // Stable, non-reversible device id: hashing means we can correlate
         // devices across applicants without retaining the raw fingerprint.
-        fingerprint: req.fingerprint ?? sha256(`${ua}|${ip}`).slice(0, 32),
+        //
+        // The applicant is part of the hash. Without it, every applicant sharing
+        // the default user agent and IP — which in seeded demo data is all of
+        // them — collapses onto one fingerprint and the whole population looks
+        // like a single device farm. A genuinely shared device is what the
+        // DUPLICATE scenario is for, and it still produces one.
+        fingerprint:
+          req.fingerprint ??
+          (hasScenario(scenarios, 'DUPLICATE')
+            ? sha256(`shared-device|${ua}|${ip}`).slice(0, 32)
+            : sha256(`${ctx.applicantId ?? ctx.tenantId}|${ua}|${ip}`).slice(0, 32)),
         ipCountry,
         asn: ip ? `AS${seededInt(`${seed}:asn`, 1000, 65000)}` : null,
         isp: isVpn ? seededPick(`${seed}:isp`, ['NordVPN', 'Mullvad', 'Surfshark']) : 'Regional Telecom',

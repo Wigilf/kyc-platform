@@ -88,6 +88,11 @@ async function main() {
       data: { reviewStatus: 'PENDING', status: 'QUEUED', submittedAt: new Date() },
     });
 
+    // The check table accumulates across runs. Report only what this run wrote,
+    // otherwise every re-run shows the union of every failure ever recorded and
+    // the script stops being able to tell you whether a fix worked.
+    const runStartedAt = new Date();
+
     const result = await runVerificationPipeline({
       tenantId: tenant.id,
       applicantId: applicant.id,
@@ -97,7 +102,7 @@ async function main() {
     const after = await prisma.applicant.findUniqueOrThrow({
       where: { id: applicant.id },
       include: {
-        checks: { orderBy: { createdAt: 'desc' } },
+        checks: { where: { createdAt: { gte: runStartedAt } }, orderBy: { createdAt: 'desc' } },
         reviews: { orderBy: { createdAt: 'desc' }, take: 1 },
         screeningRuns: { orderBy: { startedAt: 'desc' }, take: 1, include: { hits: true } },
       },
@@ -203,9 +208,21 @@ async function main() {
     where: { id: run.conversationId },
   });
 
+  // The first line of defence is that no tool can decide a verification at all.
+  // Printing "Unknown tool: approve_applicant" as if it were a policy denial
+  // hid that distinction — a denial is a runtime check, absence is structural.
+  const { TOOL_DEFINITIONS } = await import('../packages/agent/src/tools.js');
+  const registered = TOOL_DEFINITIONS.map((t) => t.spec.name);
+  const decisionTools = registered.filter((n) =>
+    /^(approve|reject|decide|override|clear)_/.test(n),
+  );
+  console.log(`registry: ${registered.length} tools, ${decisionTools.length} able to decide a verification`);
+  if (decisionTools.length) throw new Error(`Agent can decide verifications: ${decisionTools}`);
+  console.log('  → the agent cannot approve or reject anyone: no such tool exists\n');
+
   for (const [tool, intent] of [
-    ['approve_applicant', 'VERIFICATION_STATUS'],
     ['request_resubmission', 'VERIFICATION_STATUS'],
+    ['request_resubmission', 'DOCUMENT_REJECTED'],
     ['get_applicant_status', 'VERIFICATION_STATUS'],
   ] as const) {
     const outcome = await invokeTool(

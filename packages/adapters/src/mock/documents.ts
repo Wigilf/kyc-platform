@@ -54,8 +54,33 @@ const AUTHORITIES: Record<string, string> = {
   POL: 'Wojewoda Mazowiecki',
 };
 
+/** Document types that evidence an address, and so must be recently issued. */
+const PROOF_OF_ADDRESS_TYPES = [
+  'UTILITY_BILL',
+  'BANK_STATEMENT',
+  'TAX_DOCUMENT',
+  'PROOF_OF_ADDRESS',
+];
+
 function seedOf(ctx: AdapterContext, extra = ''): string {
   return `${ctx.seed ?? ctx.applicantId ?? ctx.tenantId}:${extra}`;
+}
+
+/**
+ * The candidate list minus the declared value, so a deliberate mismatch cannot
+ * accidentally pick the very name it is supposed to differ from.
+ */
+function without(items: readonly string[], exclude: string | null | undefined): readonly string[] {
+  if (!exclude) return items;
+  const filtered = items.filter((i) => i.toLowerCase() !== exclude.toLowerCase());
+  return filtered.length ? filtered : items;
+}
+
+/** Moves an ISO date back by whole years, keeping month and day. */
+function shiftYears(iso: string, years: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCFullYear(d.getUTCFullYear() - years);
+  return d.toISOString().slice(0, 10);
 }
 
 function docNumberFor(seed: string, country: string): string {
@@ -129,16 +154,50 @@ export class MockOcrAdapter implements OcrAdapter {
       });
     }
 
-    const firstName = seededPick(`${seed}:first`, FIRST_NAMES);
-    const lastName = seededPick(`${seed}:last`, LAST_NAMES);
-    const age = hasScenario(scenarios, 'UNDERAGE')
-      ? seededInt(`${seed}:age`, 14, 17)
-      : seededInt(`${seed}:age`, 21, 68);
-    const dob = isoYearsAgo(age);
+    // Echo the declared identity unless a scenario asks for a discrepancy.
+    // Inventing a name here would make every applicant fail the pipeline's
+    // declared-vs-extracted comparison, clean ones included.
+    const declared = req.declaredIdentity;
+    const nameMismatch = hasScenario(scenarios, 'NAME_MISMATCH');
+    const firstName =
+      !nameMismatch && declared?.firstName
+        ? declared.firstName
+        : seededPick(`${seed}:first`, without(FIRST_NAMES, declared?.firstName));
+    const lastName =
+      !nameMismatch && declared?.lastName
+        ? declared.lastName
+        : seededPick(`${seed}:last`, without(LAST_NAMES, declared?.lastName));
+
+    const dobMismatch = hasScenario(scenarios, 'DOB_MISMATCH');
+    let dob: string;
+    if (hasScenario(scenarios, 'UNDERAGE')) {
+      // Underage overrides the declared value: the whole point of the scenario
+      // is a document that contradicts an adult self-declaration.
+      dob = isoYearsAgo(seededInt(`${seed}:age`, 14, 17));
+    } else if (declared?.dob && !dobMismatch) {
+      dob = declared.dob;
+    } else if (declared?.dob) {
+      // Shift the declared year so the mismatch is unambiguous rather than
+      // relying on an invented date happening to differ.
+      dob = shiftYears(declared.dob, seededInt(`${seed}:dobshift`, 2, 9));
+    } else {
+      dob = isoYearsAgo(seededInt(`${seed}:age`, 21, 68));
+    }
+
     const expiryDate = hasScenario(scenarios, 'EXPIRED')
       ? isoDaysFromNow(-seededInt(`${seed}:exp`, 30, 900))
       : isoDaysFromNow(seededInt(`${seed}:exp`, 200, 3200));
-    const issuedDate = isoDaysFromNow(-seededInt(`${seed}:iss`, 400, 3000));
+
+    // Issue dates are type-dependent. A passport issued years ago is normal; a
+    // utility bill issued years ago is not a proof of address at all, and
+    // generating one guaranteed PROOF_OF_ADDRESS_TOO_OLD for every applicant.
+    const issuedDate = PROOF_OF_ADDRESS_TYPES.includes(req.documentType)
+      ? isoDaysFromNow(
+          -(hasScenario(scenarios, 'STALE_ADDRESS')
+            ? seededInt(`${seed}:iss`, 120, 900)
+            : seededInt(`${seed}:iss`, 5, 75)),
+        )
+      : isoDaysFromNow(-seededInt(`${seed}:iss`, 400, 3000));
     const documentNumber = docNumberFor(`${seed}:num`, country);
     const sex = seededPick(`${seed}:sex`, ['M', 'F'] as const);
 

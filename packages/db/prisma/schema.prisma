@@ -541,6 +541,9 @@ enum CheckType {
   WALLET_SCREENING
   SANCTIONED_COUNTRY
   QUESTIONNAIRE
+  // Completeness of the applicant's own declared data. No provider involved, but
+  // it is a pass/fail condition, not an unsatisfiable manual step.
+  APPLICANT_DATA
   MANUAL
 }
 
@@ -1214,6 +1217,12 @@ model DeviceSession {
   botScore    Int     @default(0)
   raw         Json    @default("{}")
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // One row per applicant per device. Re-verifying is not a new device, and
+  // inserting a row per run made every applicant look like a device farm to the
+  // shared-fingerprint check.
+  @@unique([applicantId, fingerprint])
 
   @@index([fingerprint])
   @@index([applicantId, createdAt])
