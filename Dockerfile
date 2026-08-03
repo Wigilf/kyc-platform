@@ -54,9 +54,12 @@ COPY --from=build /app/packages/agent/dist     packages/agent/dist
 COPY --from=build /app/packages/api/dist       packages/api/dist
 COPY --from=build /app/packages/worker/dist    packages/worker/dist
 
-# Migrations and seed are applied by the release command, not at image build.
+# Migrations are applied at container start by the entrypoint, not at build.
 COPY packages/db/prisma packages/db/prisma
 COPY --from=build /app/node_modules/.bin/prisma node_modules/.bin/prisma
+COPY --from=build /app/node_modules/prisma node_modules/prisma
+COPY --from=build /app/node_modules/@prisma node_modules/@prisma
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Never run as root: a container escape should not start with uid 0.
 USER node
@@ -65,4 +68,5 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "packages/api/dist/server.js"]

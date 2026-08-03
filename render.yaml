@@ -24,10 +24,10 @@ services:
     region: frankfurt
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
-    # Migrations run before the new instance takes traffic. The seed is
-    # idempotent and gives the deployment its demo tenant and operators.
-    preDeployCommand: >-
-      node_modules/.bin/prisma migrate deploy --schema packages/db/prisma/schema.prisma
+    # No preDeployCommand: it is a paid-plan feature, and a free service
+    # accepts the field then silently ignores it, which looks like working
+    # migrations right up until the first query hits a missing table. The
+    # container migrates itself on start instead — see docker-entrypoint.sh.
     envVars:
       - key: NODE_ENV
         value: production

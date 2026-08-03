@@ -7,3 +7,4 @@ dist/
 .DS_Store
 coverage/
 packages/db/generated/
+.render-secrets.local
