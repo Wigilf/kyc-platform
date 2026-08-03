@@ -1059,9 +1059,20 @@ export async function finalize(
   // clear a rejection. Keyed by document as well as type, because a single run
   // legitimately produces one DOCUMENT_OCR per uploaded document and collapsing
   // those would discard a real result.
+  //
+  // Superseded documents drop out entirely. Keying by document is what lets one
+  // run OCR several documents without them overwriting each other, but it also
+  // means a replaced document keeps its own slot — so the failing check on the
+  // blurry passport someone has since re-uploaded would still be "current" and
+  // would block them for good.
+  const supersededDocumentIds = new Set(
+    applicant.documents.filter((d) => d.status === 'SUPERSEDED').map((d) => d.id),
+  );
+
   type CheckRow = (typeof applicant.checks)[number];
   const latestByKey = new Map<string, CheckRow>();
   for (const c of applicant.checks) {
+    if (c.documentId && supersededDocumentIds.has(c.documentId)) continue;
     const key = `${c.type}:${c.documentId ?? ''}`;
     const seen = latestByKey.get(key);
     if (!seen || c.createdAt > seen.createdAt) latestByKey.set(key, c);

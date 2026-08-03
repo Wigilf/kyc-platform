@@ -58,7 +58,14 @@ export class MockDeviceAdapter implements DeviceAdapter {
     req: DeviceRequest,
     ctx: AdapterContext,
   ): Promise<AdapterResult<DeviceResult>> {
-    const seed = `${ctx.applicantId ?? ctx.tenantId}:device:${req.fingerprint ?? req.ipAddress ?? 'unknown'}`;
+    // Seeded on the applicant alone, deliberately not on the request.
+    //
+    // The pipeline passes back the fingerprint it stored last time, so the first
+    // assessment of an applicant has none and every later one does. Feeding that
+    // into the seed made the same device score differently on re-verification —
+    // VPN and bot signals flipped, and an applicant's risk moved with no change
+    // in evidence.
+    const seed = `${ctx.seed ?? ctx.applicantId ?? ctx.tenantId}:device`;
     const latencyMs = await simulateLatency(seed, 20, 120);
     const scenarios = detectScenarios(
       ctx.seed,

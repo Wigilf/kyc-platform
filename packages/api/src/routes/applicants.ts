@@ -334,6 +334,19 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
       if (files.length === 0) throw invalid('At least one file is required');
       const parsed = UploadDocumentMetaSchema.parse(meta);
 
+      // A replacement replaces. Without this the previous attempt stays current,
+      // and the checks attached to it keep counting against the applicant — so
+      // someone who fixes a blurry passport is still judged on the blurry one.
+      await prisma.document.updateMany({
+        where: {
+          applicantId: applicant.id,
+          type: parsed.type as never,
+          subType: parsed.subType as never,
+          status: { not: 'SUPERSEDED' },
+        },
+        data: { status: 'SUPERSEDED' },
+      });
+
       const document = await prisma.document.create({
         data: {
           applicantId: applicant.id,
