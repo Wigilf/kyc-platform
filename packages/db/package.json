@@ -13,8 +13,10 @@
   },
   "scripts": {
     "generate": "prisma generate",
-    "push": "dotenv -e ../../.env -- prisma db push --accept-data-loss",
+    "deploy": "dotenv -e ../../.env -- prisma migrate deploy",
     "migrate": "dotenv -e ../../.env -- prisma migrate dev",
+    "status": "dotenv -e ../../.env -- prisma migrate status",
+    "push": "dotenv -e ../../.env -- prisma db push --accept-data-loss",
     "studio": "dotenv -e ../../.env -- prisma studio",
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
     "build": "tsc --build"
