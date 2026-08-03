@@ -1,0 +1,25 @@
+{
+  "name": "@kyc/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@kyc/adapters": "*",
+    "@kyc/agent": "*",
+    "@kyc/core": "*",
+    "@kyc/db": "*",
+    "bullmq": "^5.34.5",
+    "dotenv": "^16.4.7",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

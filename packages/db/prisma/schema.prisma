@@ -1,0 +1,1853 @@
+// KYC / AML platform data model.
+//
+// Layout: tenancy & access -> level configuration -> applicants & PII ->
+// documents -> checks -> review & decisions -> AML screening & monitoring ->
+// KYB & UBO -> transactions & rules -> crypto / travel rule -> case management ->
+// webhooks -> agentic support -> audit & compliance.
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../generated/client"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy & access
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  // Country of incorporation of the regulated entity; drives default rulesets.
+  homeCountry   String   @default("GBR")
+  // Sector affects which templates and retention defaults apply.
+  industry      Industry @default(FINTECH)
+  dataResidency String   @default("eu")
+  // Retention clock starts at end of business relationship, not at collection.
+  retentionDays Int      @default(2555) // 7 years, typical AML record-keeping floor
+  settings      Json     @default("{}")
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  apiKeys           ApiKey[]
+  users             User[]
+  levels            VerificationLevel[]
+  applicants        Applicant[]
+  companies         Company[]
+  rules             Rule[]
+  queues            Queue[]
+  cases             Case[]
+  webhookEndpoints  WebhookEndpoint[]
+  auditLogs         AuditLog[]
+  transactions      Transaction[]
+  supportTickets    SupportTicket[]
+  knowledgeArticles KnowledgeArticle[]
+  watchlistEntries  WatchlistEntry[]
+  reports           Report[]
+  sharesOut         ReusableKycShare[]  @relation("ShareSource")
+  sharesIn          ReusableKycShare[]  @relation("ShareTarget")
+  vasps             Vasp[]
+
+  @@index([slug])
+}
+
+enum Industry {
+  FINTECH
+  CRYPTO
+  BANKING
+  GAMBLING
+  MARKETPLACE
+  LENDING
+  INSURANCE
+  TRAVEL
+  OTHER
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  // Public identifier sent in X-Kyc-App-Token.
+  keyId       String    @unique
+  // HMAC secret, stored hashed; the plaintext is shown once at creation.
+  secretHash  String
+  scopes      String[]  @default([])
+  environment Env       @default(SANDBOX)
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, environment])
+}
+
+enum Env {
+  SANDBOX
+  PRODUCTION
+}
+
+model User {
+  id           String     @id @default(cuid())
+  tenantId     String
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String
+  name         String
+  role         UserRole   @default(AGENT)
+  // Compliance officers may need scoping to a subset of queues/countries.
+  scopes       String[]   @default([])
+  passwordHash String?
+  mfaSecret    String?
+  isActive     Boolean    @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  reviews          Review[]
+  assignedCases    Case[]           @relation("CaseAssignee")
+  caseNotes        CaseNote[]
+  auditLogs        AuditLog[]
+  escalations      Escalation[]
+  supportMessages  SupportMessage[]
+  ruleVersions     RuleVersion[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  COMPLIANCE_OFFICER
+  MLRO // Money Laundering Reporting Officer: sole authority for SAR filing
+  AGENT
+  AUDITOR // read-only, cannot decide
+  AI_AGENT // service identity for the agentic support runtime
+}
+
+// ---------------------------------------------------------------------------
+// Level configuration (the "flow designer" model)
+// ---------------------------------------------------------------------------
+
+model VerificationLevel {
+  id          String      @id @default(cuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Stable name referenced by SDK integrations, e.g. "basic-kyc-level".
+  name        String
+  displayName String
+  description String?
+  subjectType SubjectType @default(INDIVIDUAL)
+  version     Int         @default(1)
+  isActive    Boolean     @default(true)
+
+  // Ordered step definitions; see @kyc/core LevelDefinition for the shape.
+  steps Json @default("[]")
+
+  // Country gating. allowedCountries empty = allow all except blocked.
+  allowedCountries String[] @default([])
+  blockedCountries String[] @default([])
+
+  // Auto-decisioning thresholds. Scores at or above manualReviewScore land in a
+  // queue instead of being auto-approved.
+  autoApprove       Boolean @default(true)
+  autoReject        Boolean @default(false)
+  manualReviewScore Int     @default(40)
+  autoRejectScore   Int     @default(80)
+
+  // Re-verification cadence for ongoing due diligence, 0 = never.
+  reverifyAfterDays Int @default(0)
+
+  // AML screening configuration for this level.
+  screeningConfig Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  applicants Applicant[]
+
+  @@unique([tenantId, name, version])
+  @@index([tenantId, isActive])
+}
+
+enum SubjectType {
+  INDIVIDUAL
+  COMPANY
+}
+
+// ---------------------------------------------------------------------------
+// Applicants & PII
+// ---------------------------------------------------------------------------
+
+model Applicant {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Client's own user identifier. Unique per tenant so repeat submissions
+  // attach to one applicant instead of forking a new identity.
+  externalUserId String
+  levelId        String
+  level          VerificationLevel @relation(fields: [levelId], references: [id])
+  subjectType    SubjectType       @default(INDIVIDUAL)
+
+  status       ApplicantStatus @default(INIT)
+  reviewStatus ReviewStatus    @default(NOT_STARTED)
+
+  // Risk snapshot, recomputed on every pipeline run.
+  riskScore Int       @default(0)
+  riskLevel RiskLevel @default(LOW)
+  // Enhanced due diligence latch: once set, cannot be auto-approved.
+  ddLevel   DdLevel   @default(SDD)
+
+  // Denormalised for list views and dedup search.
+  firstName   String?
+  lastName    String?
+  dob         DateTime?
+  country     String?
+  nationality String?
+  email       String?
+  phone       String?
+
+  // Envelope-encrypted PII blob (see @kyc/core/crypto). Holds full address,
+  // national ID numbers, and anything not needed for indexed search.
+  piiCiphertext String?
+  piiKeyVersion Int     @default(1)
+
+  // Deterministic search keys so we can dedup without decrypting.
+  identityFingerprint String? // sha256(normalized name + dob + country)
+  docNumberHash       String? // sha256(normalized primary document number)
+
+  ipAddress   String?
+  ipCountry   String?
+  userAgent   String?
+  lang        String  @default("en")
+  sourceKey   String? // marketing/partner attribution passed by the client
+  tags        String[] @default([])
+  metadata    Json     @default("{}")
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  submittedAt    DateTime?
+  reviewedAt     DateTime?
+  nextReviewAt   DateTime?
+  // Set when a data-subject erasure request is honoured.
+  redactedAt     DateTime?
+
+  documents        Document[]
+  checks           Check[]
+  reviews          Review[]
+  statusEvents     ApplicantStatusEvent[]
+  screeningRuns    AmlScreeningRun[]
+  monitoring       MonitoringSubscription[]
+  cases            Case[]
+  devices          DeviceSession[]
+  consents         Consent[]
+  transactions     Transaction[]
+  wallets          WalletAddress[]
+  supportTickets   SupportTicket[]
+  faceIndexEntries FaceIndexEntry[]
+  shares           ReusableKycShare[]
+  questionnaires   QuestionnaireResponse[]
+  webhookDeliveries WebhookDelivery[]
+
+  @@unique([tenantId, externalUserId])
+  @@index([tenantId, reviewStatus])
+  @@index([tenantId, status])
+  @@index([tenantId, riskLevel])
+  @@index([identityFingerprint])
+  @@index([docNumberHash])
+  @@index([nextReviewAt])
+  @@index([tenantId, createdAt])
+}
+
+enum ApplicantStatus {
+  INIT // created, nothing submitted
+  PENDING // applicant is filling in / uploading
+  AWAITING_USER // we asked for something more
+  QUEUED // submitted, waiting for the pipeline
+  PROCESSING // checks running
+  ON_HOLD // blocked on an external dependency
+  COMPLETED // terminal for this level
+}
+
+enum ReviewStatus {
+  NOT_STARTED
+  PENDING // awaiting automated checks
+  QUEUED // awaiting a human
+  ON_HOLD
+  APPROVED
+  REJECTED_RETRY // "temporary" reject: applicant may resubmit
+  REJECTED_FINAL // "final" reject: fraud/blocklist, no resubmission
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum DdLevel {
+  SDD // simplified
+  CDD // standard
+  EDD // enhanced
+}
+
+model ApplicantStatusEvent {
+  id          String       @id @default(cuid())
+  applicantId String
+  applicant   Applicant    @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  fromStatus  ReviewStatus?
+  toStatus    ReviewStatus
+  reason      String?
+  actorType   ActorType    @default(SYSTEM)
+  actorId     String?
+  metadata    Json         @default("{}")
+  createdAt   DateTime     @default(now())
+
+  @@index([applicantId, createdAt])
+}
+
+enum ActorType {
+  SYSTEM
+  USER
+  APPLICANT
+  AI_AGENT
+  API
+  SCHEDULER
+}
+
+// Free-form structured data collection (source of funds, employment, PEP
+// self-declaration). Definition lives on the level's step config.
+model QuestionnaireResponse {
+  id          String    @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  formId      String
+  answers     Json      @default("{}")
+  score       Int       @default(0)
+  submittedAt DateTime  @default(now())
+
+  @@index([applicantId, formId])
+}
+
+model Consent {
+  id          String      @id @default(cuid())
+  applicantId String
+  applicant   Applicant   @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  type        ConsentType
+  granted     Boolean
+  // Evidence for GDPR Art. 7(1): what exactly they agreed to, and from where.
+  policyVersion String
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+
+  @@index([applicantId, type])
+}
+
+enum ConsentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  BIOMETRIC_PROCESSING
+  DATA_SHARING
+  ONGOING_MONITORING
+}
+
+// ---------------------------------------------------------------------------
+// Documents
+// ---------------------------------------------------------------------------
+
+model Document {
+  id          String    @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  type    DocumentType
+  subType DocumentSubType?
+  country String?
+  status  DocumentStatus   @default(UPLOADED)
+
+  // Extracted fields (OCR/NFC/MRZ), normalised by @kyc/core.
+  number         String?
+  numberHash     String?
+  issuedDate     DateTime?
+  expiryDate     DateTime?
+  issuingAuthority String?
+  extracted      Json      @default("{}")
+
+  // Authenticity signals produced by the doc-auth adapter.
+  authenticityScore Int?
+  tamperFlags       String[] @default([])
+  // NFC chip verification (passive authentication) result, if attempted.
+  nfcVerified       Boolean?
+
+  rejectLabels String[] @default([])
+  reviewNote   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  images DocumentImage[]
+  checks Check[]
+
+  @@index([applicantId, type])
+  @@index([numberHash])
+}
+
+enum DocumentType {
+  PASSPORT
+  ID_CARD
+  DRIVERS_LICENSE
+  RESIDENCE_PERMIT
+  VISA
+  SELFIE
+  VIDEO_SELFIE
+  PROOF_OF_ADDRESS
+  BANK_STATEMENT
+  UTILITY_BILL
+  PAYSLIP
+  TAX_DOCUMENT
+  SOURCE_OF_FUNDS
+  COMPANY_REGISTRATION
+  ARTICLES_OF_ASSOCIATION
+  SHAREHOLDER_REGISTRY
+  UBO_DECLARATION
+  POWER_OF_ATTORNEY
+  OTHER
+}
+
+enum DocumentSubType {
+  FRONT_SIDE
+  BACK_SIDE
+  BOTH_SIDES
+  PAGE
+}
+
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  EXTRACTED
+  VERIFIED
+  REJECTED
+  EXPIRED
+  SUPERSEDED
+}
+
+model DocumentImage {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  // Object-storage key, never the bytes. Images are large and must not sit in
+  // Postgres rows we read on every list query.
+  storageKey  String
+  contentType String
+  bytes       Int
+  sha256      String
+  side        DocumentSubType @default(FRONT_SIDE)
+  // Quality gate results, so we can ask for a re-take before burning an OCR call.
+  quality     Json            @default("{}")
+  capturedBy  CaptureMethod   @default(UPLOAD)
+  createdAt   DateTime        @default(now())
+
+  @@index([documentId])
+  @@index([sha256])
+}
+
+enum CaptureMethod {
+  UPLOAD
+  WEB_SDK_CAMERA
+  MOBILE_SDK_CAMERA
+  NFC_CHIP
+  API
+}
+
+// ---------------------------------------------------------------------------
+// Checks
+// ---------------------------------------------------------------------------
+
+model Check {
+  id          String    @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  documentId  String?
+  document    Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  type   CheckType
+  status CheckStatus @default(PENDING)
+  result CheckResult?
+
+  // 0-100 confidence from the provider, where meaningful.
+  score Int?
+  // Contribution to the applicant's aggregate risk score.
+  riskContribution Int @default(0)
+
+  provider  String?
+  providerRef String?
+  // Raw provider payload, retained for dispute handling and model retraining.
+  raw       Json    @default("{}")
+  // Normalised, human-readable findings surfaced in the dashboard.
+  findings  Json    @default("[]")
+
+  rejectLabels String[] @default([])
+  errorCode    String?
+  errorMessage String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  // Checks expire; a liveness pass from 18 months ago is not evidence today.
+  expiresAt   DateTime?
+  attempt     Int       @default(1)
+  createdAt   DateTime  @default(now())
+
+  @@index([applicantId, type])
+  @@index([applicantId, status])
+}
+
+enum CheckType {
+  DOCUMENT_OCR
+  DOCUMENT_AUTHENTICITY
+  MRZ_VALIDATION
+  NFC_CHIP
+  LIVENESS
+  FACE_MATCH
+  DUPLICATE_FACE // same face, different identity claim
+  DUPLICATE_IDENTITY // same name/dob/doc across applicants
+  AML_SCREENING
+  ADVERSE_MEDIA
+  PROOF_OF_ADDRESS
+  AGE_ESTIMATION
+  TIN_VALIDATION
+  BANK_ACCOUNT
+  PHONE_RISK
+  EMAIL_RISK
+  IP_GEOLOCATION
+  DEVICE_FINGERPRINT
+  BEHAVIORAL_BIOMETRICS
+  COMPANY_REGISTRY
+  UBO_DISCOVERY
+  WALLET_SCREENING
+  SANCTIONED_COUNTRY
+  QUESTIONNAIRE
+  MANUAL
+}
+
+enum CheckStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED // provider/infra error; retryable, not a verdict
+  SKIPPED
+  EXPIRED
+}
+
+enum CheckResult {
+  PASS
+  FAIL
+  WARNING // needs a human eye, not necessarily bad
+  INCONCLUSIVE
+}
+
+// ---------------------------------------------------------------------------
+// Review & decisions
+// ---------------------------------------------------------------------------
+
+model Review {
+  id          String    @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  decision   ReviewDecision
+  // AUTOMATED decisions carry the rule ids that fired; MANUAL carry a reviewer.
+  source     ReviewSource   @default(AUTOMATED)
+  reviewerId String?
+  reviewer   User?          @relation(fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  // Machine-readable reasons, e.g. ["DOCUMENT_EXPIRED", "SELFIE_MISMATCH"].
+  rejectLabels String[] @default([])
+  // Client-facing text; the applicant sees this verbatim.
+  clientComment String?
+  // Internal-only rationale; never leaves the dashboard or audit export.
+  moderationComment String?
+
+  riskScoreAtDecision Int      @default(0)
+  firedRuleIds        String[] @default([])
+  // Set when a decision reverses an earlier one.
+  supersedesId        String?
+  createdAt           DateTime @default(now())
+
+  @@index([applicantId, createdAt])
+  @@index([reviewerId])
+}
+
+enum ReviewDecision {
+  APPROVED
+  REJECTED_RETRY
+  REJECTED_FINAL
+  ON_HOLD
+  ESCALATED
+}
+
+enum ReviewSource {
+  AUTOMATED
+  MANUAL
+  AI_ASSISTED // agent recommended, human confirmed
+  API
+}
+
+// ---------------------------------------------------------------------------
+// AML screening & ongoing monitoring
+// ---------------------------------------------------------------------------
+
+// Local watchlist corpus. In mock mode this is the whole world; in live mode it
+// caches provider records so hit review survives provider outages.
+model WatchlistEntry {
+  id       String  @id @default(cuid())
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Global entries have tenantId = null; tenant-scoped rows are internal
+  // blocklists and allowlists.
+  listType    WatchlistType
+  listName    String // "OFAC SDN", "EU Consolidated", "UN 1267", "internal-blocklist"
+  sourceRef   String?
+  entityType  SubjectType   @default(INDIVIDUAL)
+
+  fullName  String
+  aliases   String[]  @default([])
+  dob       DateTime?
+  yobOnly   Int?
+  countries String[]  @default([])
+  // Normalised name tokens for fuzzy matching without a trigram index scan.
+  nameTokens String[] @default([])
+
+  positions   String[] @default([]) // for PEP entries
+  pepTier     Int? // 1 = head of state, 4 = local official
+  program     String? // sanctions program, e.g. "UKRAINE-EO13662"
+  remarks     String?
+  listedAt    DateTime?
+  delistedAt  DateTime?
+  isActive    Boolean  @default(true)
+  raw         Json     @default("{}")
+  updatedAt   DateTime @updatedAt
+
+  hits AmlHit[]
+
+  @@index([listType, isActive])
+  @@index([tenantId, listType])
+  @@index([fullName])
+}
+
+enum WatchlistType {
+  SANCTIONS
+  PEP
+  ADVERSE_MEDIA
+  WANTED
+  REGULATORY_ENFORCEMENT
+  INTERNAL_BLOCKLIST
+  INTERNAL_ALLOWLIST
+  DISQUALIFIED_DIRECTOR
+}
+
+model AmlScreeningRun {
+  id          String     @id @default(cuid())
+  applicantId String?
+  applicant   Applicant? @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  companyId   String?
+  company     Company?   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  trigger    ScreeningTrigger @default(INITIAL)
+  // Snapshot of what we searched, so a later re-run is comparable.
+  queryName  String
+  queryDob   DateTime?
+  queryCountry String?
+  listTypes  WatchlistType[]  @default([])
+  fuzziness  Float            @default(0.75)
+
+  status    CheckStatus @default(PENDING)
+  hitCount  Int         @default(0)
+  // Hits that a human has not yet cleared.
+  openHitCount Int      @default(0)
+  provider  String?
+  raw       Json        @default("{}")
+  startedAt DateTime    @default(now())
+  completedAt DateTime?
+
+  hits AmlHit[]
+
+  @@index([applicantId, startedAt])
+  @@index([companyId, startedAt])
+}
+
+enum ScreeningTrigger {
+  INITIAL
+  RESUBMISSION
+  ONGOING_MONITORING
+  LIST_UPDATE // a watchlist changed and re-matched an existing customer
+  MANUAL
+  PERIODIC_REVIEW
+}
+
+model AmlHit {
+  id       String          @id @default(cuid())
+  runId    String
+  run      AmlScreeningRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  entryId  String?
+  entry    WatchlistEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+
+  listType   WatchlistType
+  listName   String
+  matchedName String
+  // 0-1 similarity. Below the run's fuzziness threshold it is not persisted.
+  matchScore Float
+  // Which fields corroborated: NAME, DOB, COUNTRY, DOC_NUMBER, YOB.
+  matchedFields String[] @default([])
+
+  status     HitStatus @default(OPEN)
+  // Analyst disposition. FALSE_POSITIVE decisions feed the allowlist so the
+  // same hit does not resurface on every monitoring cycle.
+  resolution HitResolution?
+  resolvedBy String?
+  resolvedAt DateTime?
+  note       String?
+  snapshot   Json      @default("{}")
+  createdAt  DateTime  @default(now())
+
+  @@index([runId, status])
+  @@index([status, createdAt])
+}
+
+enum HitStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  SUPPRESSED // matched a prior false-positive decision
+}
+
+enum HitResolution {
+  TRUE_POSITIVE
+  FALSE_POSITIVE
+  UNABLE_TO_DETERMINE
+}
+
+model MonitoringSubscription {
+  id          String    @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  isActive       Boolean        @default(true)
+  listTypes      WatchlistType[] @default([])
+  frequency      MonitoringFrequency @default(DAILY)
+  lastScreenedAt DateTime?
+  nextScreenAt   DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@unique([applicantId])
+  @@index([isActive, nextScreenAt])
+}
+
+enum MonitoringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+}
+
+// ---------------------------------------------------------------------------
+// KYB: companies, registries, UBO graph
+// ---------------------------------------------------------------------------
+
+model Company {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  legalName      String
+  tradingName    String?
+  registrationNumber String?
+  taxId          String?
+  lei            String? // Legal Entity Identifier
+  country        String
+  jurisdiction   String?
+  legalForm      String?
+  incorporatedAt DateTime?
+  status         CompanyStatus @default(PENDING)
+
+  registeredAddress Json @default("{}")
+  industryCodes     String[] @default([])
+  website           String?
+
+  riskScore Int       @default(0)
+  riskLevel RiskLevel @default(LOW)
+  // True when the ownership chain could not be resolved to natural persons.
+  uboUnresolved Boolean @default(false)
+  // Depth of the deepest resolved ownership path.
+  uboDepth      Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  applicants     Applicant[]
+  registryRecords CompanyRegistryRecord[]
+  positions      CompanyPosition[]
+  screeningRuns  AmlScreeningRun[]
+  ownedBy        OwnershipEdge[] @relation("EdgeChild")
+  owns           OwnershipEdge[] @relation("EdgeParentCompany")
+
+  @@index([tenantId, legalName])
+  @@unique([tenantId, country, registrationNumber])
+}
+
+enum CompanyStatus {
+  PENDING
+  ACTIVE
+  DISSOLVED
+  LIQUIDATION
+  SUSPENDED
+  UNKNOWN
+}
+
+model CompanyRegistryRecord {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  registry  String // "Companies House", "Handelsregister", ...
+  fetchedAt DateTime @default(now())
+  // Verbatim registry response; the legal evidence for the KYB file.
+  payload   Json     @default("{}")
+  documentUrl String?
+
+  @@index([companyId, fetchedAt])
+}
+
+// A natural person or company holding a role in a company.
+model CompanyPosition {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  role      PositionRole
+  fullName  String
+  dob       DateTime?
+  country   String?
+  // Set once this officer has been put through KYC as an applicant.
+  applicantExternalId String?
+  appointedAt DateTime?
+  resignedAt  DateTime?
+  isActive    Boolean  @default(true)
+  // Officers must be screened too, not just the entity.
+  screened    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([companyId, role])
+}
+
+enum PositionRole {
+  DIRECTOR
+  SHADOW_DIRECTOR
+  SECRETARY
+  OFFICER
+  SIGNATORY
+  SHAREHOLDER
+  UBO
+  TRUSTEE
+  SETTLOR
+  BENEFICIARY
+  NOMINEE
+  LEGAL_REPRESENTATIVE
+}
+
+// One edge of the ownership graph. Parent is either a company or a person;
+// walking child->parent repeatedly resolves ultimate beneficial owners.
+model OwnershipEdge {
+  id      String  @id @default(cuid())
+  childId String
+  child   Company @relation("EdgeChild", fields: [childId], references: [id], onDelete: Cascade)
+
+  parentCompanyId String?
+  parentCompany   Company? @relation("EdgeParentCompany", fields: [parentCompanyId], references: [id], onDelete: Cascade)
+
+  // Populated when the parent is a natural person (a leaf of the graph).
+  parentPersonName String?
+  parentPersonDob  DateTime?
+  parentPersonCountry String?
+
+  // Direct holding at this edge, 0-100. Effective ownership is the product of
+  // percentages along the path, computed in @kyc/core/ubo.
+  ownershipPercent Float   @default(0)
+  votingPercent    Float?
+  controlType      ControlType @default(SHARES)
+  isNominee        Boolean @default(false)
+  source           String? // "registry" | "declaration" | "manual"
+  verifiedAt       DateTime?
+  createdAt        DateTime @default(now())
+
+  @@index([childId])
+  @@index([parentCompanyId])
+}
+
+enum ControlType {
+  SHARES
+  VOTING_RIGHTS
+  BOARD_APPOINTMENT
+  SIGNIFICANT_INFLUENCE
+  OTHER_CONTROL
+}
+
+// ---------------------------------------------------------------------------
+// Transactions & rules engine
+// ---------------------------------------------------------------------------
+
+model Transaction {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  applicantId String?
+  applicant   Applicant? @relation(fields: [applicantId], references: [id], onDelete: SetNull)
+
+  externalId String
+  direction  TxDirection
+  type       TxType      @default(TRANSFER)
+  status     TxStatus    @default(PENDING)
+
+  amount    Decimal @db.Decimal(24, 8)
+  currency  String
+  // Normalised to the tenant's reporting currency for threshold rules.
+  amountBase Decimal @db.Decimal(24, 8)
+  baseCurrency String @default("EUR")
+  fxRate    Decimal? @db.Decimal(18, 8)
+
+  // Counterparty. For crypto, address + chain; for fiat, name + IBAN hash.
+  counterpartyName    String?
+  counterpartyCountry String?
+  counterpartyAccountHash String?
+  counterpartyWallet  String?
+  chain               String?
+  txHash              String?
+
+  paymentMethod String?
+  deviceId      String?
+  ipAddress     String?
+  ipCountry     String?
+  occurredAt    DateTime
+  createdAt     DateTime @default(now())
+
+  riskScore Int     @default(0)
+  isFlagged Boolean @default(false)
+  metadata  Json    @default("{}")
+
+  alerts     Alert[]
+  screenings WalletScreening[]
+  travelRule TravelRuleMessage[]
+
+  @@unique([tenantId, externalId])
+  @@index([tenantId, occurredAt])
+  @@index([applicantId, occurredAt])
+  @@index([tenantId, isFlagged])
+}
+
+enum TxDirection {
+  INBOUND
+  OUTBOUND
+  INTERNAL
+}
+
+enum TxType {
+  TRANSFER
+  DEPOSIT
+  WITHDRAWAL
+  CARD_PAYMENT
+  TRADE
+  EXCHANGE
+  REFUND
+  FEE
+  PAYOUT
+}
+
+enum TxStatus {
+  PENDING
+  APPROVED
+  BLOCKED
+  REVERSED
+  SETTLED
+  UNDER_REVIEW
+}
+
+// Persisted rule definition. Conditions are a JSON AST evaluated by
+// @kyc/core/rules; keeping them as data means compliance can change policy
+// without a deploy, and every change is versioned and attributable.
+model Rule {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  scope       RuleScope
+  // Lower runs first. Ties broken by name for determinism.
+  priority    Int      @default(100)
+  isActive    Boolean  @default(true)
+  // Shadow rules evaluate and log but never affect outcomes; use to test policy
+  // against live traffic before enforcing.
+  isShadow    Boolean  @default(false)
+
+  conditions Json @default("{}")
+  actions    Json @default("[]")
+
+  currentVersion Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  versions RuleVersion[]
+  alerts   Alert[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, scope, isActive])
+}
+
+enum RuleScope {
+  APPLICANT_RISK
+  DOCUMENT
+  SCREENING
+  TRANSACTION
+  ONGOING_MONITORING
+  COMPANY
+  SUPPORT_ROUTING
+}
+
+model RuleVersion {
+  id        String   @id @default(cuid())
+  ruleId    String
+  rule      Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  version   Int
+  conditions Json    @default("{}")
+  actions   Json     @default("[]")
+  changeNote String?
+  authorId  String?
+  author    User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@unique([ruleId, version])
+}
+
+model Alert {
+  id       String @id @default(cuid())
+  ruleId   String?
+  rule     Rule?  @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  severity Severity   @default(MEDIUM)
+  title    String
+  detail   Json       @default("{}")
+  status   AlertStatus @default(OPEN)
+  createdAt DateTime  @default(now())
+
+  cases CaseAlert[]
+
+  @@index([status, severity])
+  @@index([transactionId])
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  IN_CASE
+  DISMISSED
+  ESCALATED
+  CLOSED
+}
+
+// ---------------------------------------------------------------------------
+// Crypto: wallets, screening, travel rule
+// ---------------------------------------------------------------------------
+
+model WalletAddress {
+  id          String    @id @default(cuid())
+  applicantId String?
+  applicant   Applicant? @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  chain       String
+  address     String
+  // Proof the applicant controls the address (signed message / satoshi test).
+  ownershipProof Json?
+  verifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  screenings WalletScreening[]
+
+  @@unique([chain, address, applicantId])
+  @@index([address])
+}
+
+model WalletScreening {
+  id       String @id @default(cuid())
+  walletId String?
+  wallet   WalletAddress? @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  chain   String
+  address String
+  // Provider risk verdict plus the exposure breakdown by category.
+  riskScore Int      @default(0)
+  severity  Severity @default(LOW)
+  categories String[] @default([]) // "darknet", "mixer", "sanctioned-entity", "ransomware"
+  // Attribution: the named cluster owner, if identified.
+  clusterName String?
+  // Indirect exposure hops; 1 = direct counterparty.
+  exposureHops Int?
+  provider  String?
+  raw       Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([address, createdAt])
+}
+
+// Counterparty VASP directory for FATF Recommendation 16 messaging.
+model Vasp {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name     String
+  legalName String?
+  country  String
+  // TRISA / TRP / OpenVASP endpoint.
+  protocol String  @default("TRP")
+  endpoint String?
+  publicKey String?
+  didKey   String?
+  isTrusted Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  outgoing TravelRuleMessage[] @relation("BeneficiaryVasp")
+  incoming TravelRuleMessage[] @relation("OriginatorVasp")
+
+  @@unique([tenantId, name])
+}
+
+model TravelRuleMessage {
+  id            String  @id @default(cuid())
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  direction TxDirection
+  status    TravelRuleStatus @default(PENDING)
+  protocol  String           @default("TRP")
+
+  originatorVaspId  String?
+  originatorVasp    Vasp?   @relation("OriginatorVasp", fields: [originatorVaspId], references: [id])
+  beneficiaryVaspId String?
+  beneficiaryVasp   Vasp?   @relation("BeneficiaryVasp", fields: [beneficiaryVaspId], references: [id])
+
+  // IVMS101-shaped payloads. Encrypted because they carry counterparty PII we
+  // are only permitted to hold for the transfer.
+  originatorPayload  String?
+  beneficiaryPayload String?
+
+  // Sub-threshold transfers may be exempt from data exchange.
+  thresholdExempt Boolean @default(false)
+  rejectReason    String?
+  sentAt          DateTime?
+  respondedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([transactionId])
+  @@index([status])
+}
+
+enum TravelRuleStatus {
+  PENDING
+  SENT
+  ACCEPTED
+  REJECTED
+  UNSUPPORTED_COUNTERPARTY
+  EXEMPT
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Device intelligence & dedup
+// ---------------------------------------------------------------------------
+
+model DeviceSession {
+  id          String    @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  fingerprint String
+  ipAddress   String?
+  ipCountry   String?
+  asn         String?
+  // Signals that correlate with fraud farms.
+  isVpn       Boolean @default(false)
+  isTor       Boolean @default(false)
+  isProxy     Boolean @default(false)
+  isEmulator  Boolean @default(false)
+  isRooted    Boolean @default(false)
+  // Timezone/locale mismatch against the claimed document country.
+  geoMismatch Boolean @default(false)
+
+  os          String?
+  browser     String?
+  screen      String?
+  timezone    String?
+  // Aggregate behavioural signal, e.g. paste-into-form, session speed.
+  botScore    Int     @default(0)
+  raw         Json    @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([fingerprint])
+  @@index([applicantId, createdAt])
+}
+
+// Biometric template index for cross-applicant duplicate detection. Stores a
+// vector, never an image; the image lives in object storage.
+model FaceIndexEntry {
+  id          String    @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  // Quantised embedding. A real deployment swaps this for pgvector.
+  embedding   Float[]
+  // Coarse bucket key so we compare against a subset, not the whole index.
+  bucket      String
+  quality     Float     @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([bucket])
+  @@index([applicantId])
+}
+
+// Cross-tenant reuse of a completed verification ("reusable KYC"), gated on
+// explicit applicant consent.
+model ReusableKycShare {
+  id          String @id @default(cuid())
+  applicantId String
+  applicant   Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  sourceTenantId String
+  sourceTenant   Tenant @relation("ShareSource", fields: [sourceTenantId], references: [id], onDelete: Cascade)
+  targetTenantId String
+  targetTenant   Tenant @relation("ShareTarget", fields: [targetTenantId], references: [id], onDelete: Cascade)
+
+  status      ShareStatus @default(REQUESTED)
+  // Exactly which fields/documents the applicant agreed to share.
+  sharedScope String[]    @default([])
+  consentId   String?
+  expiresAt   DateTime?
+  createdAt   DateTime    @default(now())
+  respondedAt DateTime?
+
+  @@unique([applicantId, targetTenantId])
+  @@index([targetTenantId, status])
+}
+
+enum ShareStatus {
+  REQUESTED
+  CONSENTED
+  DECLINED
+  REVOKED
+  EXPIRED
+}
+
+// ---------------------------------------------------------------------------
+// Case management
+// ---------------------------------------------------------------------------
+
+model Queue {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name     String
+  description String?
+  // Filter AST matched against case attributes to auto-route new cases.
+  routing  Json   @default("{}")
+  // Minutes to first touch / to resolution.
+  slaFirstResponseMinutes Int @default(240)
+  slaResolutionMinutes    Int @default(1440)
+  isDefault Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  cases Case[]
+
+  @@unique([tenantId, name])
+}
+
+model Case {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Human-facing sequential reference, e.g. "CASE-1042".
+  reference String
+
+  type     CaseType
+  status   CaseStatus @default(OPEN)
+  priority Severity   @default(MEDIUM)
+
+  applicantId String?
+  applicant   Applicant? @relation(fields: [applicantId], references: [id], onDelete: SetNull)
+
+  queueId String?
+  queue   Queue?  @relation(fields: [queueId], references: [id], onDelete: SetNull)
+
+  assigneeId String?
+  assignee   User?   @relation("CaseAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  title   String
+  summary String?
+  // Structured context assembled by the pipeline: which checks failed, which
+  // rules fired, what the agent already tried.
+  context Json    @default("{}")
+
+  // SLA tracking.
+  dueAt          DateTime?
+  firstTouchedAt DateTime?
+  breachedSla    Boolean   @default(false)
+
+  outcome     CaseOutcome?
+  resolution  String?
+  // Set when a SAR/STR was filed off the back of this case.
+  sarFiledAt  DateTime?
+  sarReference String?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  closedAt   DateTime?
+
+  notes  CaseNote[]
+  alerts CaseAlert[]
+  tickets SupportTicket[]
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, status, priority])
+  @@index([assigneeId, status])
+  @@index([queueId, status])
+}
+
+enum CaseType {
+  MANUAL_REVIEW
+  AML_HIT_REVIEW
+  FRAUD_INVESTIGATION
+  TRANSACTION_ALERT
+  DOCUMENT_ISSUE
+  KYB_REVIEW
+  UBO_RESOLUTION
+  DUPLICATE_ACCOUNT
+  APPEAL // applicant contests a rejection
+  SUPPORT_ESCALATION
+  PERIODIC_REVIEW
+  DATA_SUBJECT_REQUEST
+}
+
+enum CaseStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_ON_APPLICANT
+  WAITING_ON_THIRD_PARTY
+  ESCALATED
+  RESOLVED
+  CLOSED
+}
+
+enum CaseOutcome {
+  APPROVED
+  REJECTED
+  NO_ACTION
+  SAR_FILED
+  ACCOUNT_CLOSED
+  FALSE_POSITIVE
+  DUPLICATE
+}
+
+model CaseNote {
+  id       String   @id @default(cuid())
+  caseId   String
+  case     Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  authorId String?
+  author   User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  actorType ActorType @default(USER)
+  body     String
+  // Notes written by the AI agent are marked so audits can separate them.
+  isInternal Boolean @default(true)
+  attachments Json   @default("[]")
+  createdAt DateTime @default(now())
+
+  @@index([caseId, createdAt])
+}
+
+model CaseAlert {
+  caseId  String
+  case    Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  alertId String
+  alert   Alert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, alertId])
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks
+// ---------------------------------------------------------------------------
+
+model WebhookEndpoint {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  url         String
+  description String?
+  // Per-endpoint secret so rotating one integration does not break the others.
+  secret      String
+  eventTypes  String[] @default([])
+  isActive    Boolean  @default(true)
+  environment Env      @default(SANDBOX)
+
+  // Circuit breaker: after enough consecutive failures we stop hammering and
+  // surface it in the dashboard.
+  consecutiveFailures Int      @default(0)
+  disabledAt          DateTime?
+  createdAt           DateTime @default(now())
+
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId, isActive])
+}
+
+model WebhookDelivery {
+  id         String          @id @default(cuid())
+  endpointId String
+  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  applicantId String?
+  applicant   Applicant? @relation(fields: [applicantId], references: [id], onDelete: SetNull)
+
+  eventType String
+  // Idempotency key echoed to the receiver so retries are safe for them too.
+  eventId   String @unique
+  payload   Json
+
+  status      DeliveryStatus @default(PENDING)
+  attempt     Int            @default(0)
+  maxAttempts Int            @default(8)
+  responseStatus Int?
+  responseBody   String?
+  errorMessage   String?
+  nextAttemptAt  DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([status, nextAttemptAt])
+  @@index([endpointId, createdAt])
+}
+
+enum DeliveryStatus {
+  PENDING
+  RETRYING
+  DELIVERED
+  FAILED
+  ABANDONED
+}
+
+// ---------------------------------------------------------------------------
+// Agentic customer service
+// ---------------------------------------------------------------------------
+
+model SupportTicket {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reference String
+
+  applicantId String?
+  applicant   Applicant? @relation(fields: [applicantId], references: [id], onDelete: SetNull)
+
+  channel  SupportChannel @default(WEB_SDK)
+  // Classified intent drives which tools the agent is allowed to use.
+  intent   SupportIntent? @default(UNKNOWN)
+  subject  String
+  status   TicketStatus   @default(OPEN)
+  priority Severity       @default(MEDIUM)
+  language String         @default("en")
+
+  // Who currently owns the ticket.
+  handledBy HandlerType @default(AI_AGENT)
+
+  // Set when the agent hands off; the linked case carries the human workflow.
+  caseId String?
+  case   Case?  @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  csatScore   Int?
+  csatComment String?
+  // Resolved without any human touch.
+  autoResolved Boolean @default(false)
+
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  conversations SupportConversation[]
+  escalations   Escalation[]
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, status])
+  @@index([applicantId])
+}
+
+enum SupportChannel {
+  WEB_SDK
+  MOBILE_SDK
+  EMAIL
+  CHAT_WIDGET
+  API
+  WHATSAPP
+  SLACK
+  PHONE_TRANSCRIPT
+}
+
+enum SupportIntent {
+  UNKNOWN
+  VERIFICATION_STATUS
+  DOCUMENT_REJECTED
+  UPLOAD_HELP
+  LIVENESS_FAILURE
+  APPEAL_DECISION
+  DATA_CORRECTION
+  DATA_DELETION
+  SCREENING_DISPUTE // "I am not that sanctioned person"
+  ACCOUNT_ACCESS
+  TIMELINE_QUESTION
+  TECHNICAL_ISSUE
+  COMPLAINT
+  FRAUD_REPORT
+  OTHER
+}
+
+enum TicketStatus {
+  OPEN
+  AGENT_HANDLING
+  AWAITING_APPLICANT
+  ESCALATED
+  PENDING_HUMAN
+  RESOLVED
+  CLOSED
+  ABANDONED
+}
+
+enum HandlerType {
+  AI_AGENT
+  HUMAN
+  HYBRID
+}
+
+model SupportConversation {
+  id       String        @id @default(cuid())
+  ticketId String
+  ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  // Opaque handle the SDK holds onto to resume a conversation.
+  sessionKey String  @unique
+  // Which agent persona/config handled this thread.
+  agentName  String  @default("kyc-support-agent")
+  model      String?
+  // Snapshot of the policy in force; policies change, transcripts must not
+  // become unexplainable afterwards.
+  policyVersion String @default("v1")
+
+  isActive  Boolean  @default(true)
+  turnCount Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages SupportMessage[]
+  runs     AgentRun[]
+
+  @@index([ticketId])
+}
+
+model SupportMessage {
+  id             String              @id @default(cuid())
+  conversationId String
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  role      MessageRole
+  content   String
+  // Redacted copy shown to humans when the raw text contains PII the reviewer
+  // is not entitled to see.
+  redactedContent String?
+  authorUserId String?
+  authorUser   User?   @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  // Populated for assistant turns that requested tools.
+  toolCalls Json    @default("[]")
+  // Model bookkeeping for cost attribution.
+  inputTokens  Int?
+  outputTokens Int?
+  latencyMs    Int?
+  // Guardrail verdict for this message, if the filter modified or blocked it.
+  guardrail Json @default("{}")
+  createdAt DateTime @default(now())
+
+  toolInvocations ToolInvocation[]
+
+  @@index([conversationId, createdAt])
+}
+
+enum MessageRole {
+  SYSTEM
+  APPLICANT
+  ASSISTANT
+  TOOL
+  HUMAN_AGENT
+  NOTE
+}
+
+// One agent loop execution: a turn that may fan out into several tool calls.
+model AgentRun {
+  id             String              @id @default(cuid())
+  conversationId String
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  status     AgentRunStatus @default(RUNNING)
+  runtime    String         @default("claude") // claude | stub
+  model      String?
+  turns      Int            @default(0)
+  maxTurns   Int            @default(12)
+  stopReason String?
+
+  inputTokens  Int @default(0)
+  outputTokens Int @default(0)
+  costUsd      Decimal? @db.Decimal(12, 6)
+
+  errorMessage String?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+
+  invocations ToolInvocation[]
+
+  @@index([conversationId, startedAt])
+}
+
+enum AgentRunStatus {
+  RUNNING
+  COMPLETED
+  ESCALATED
+  MAX_TURNS
+  BLOCKED_BY_POLICY
+  FAILED
+}
+
+// Audit record for every tool the agent touched. This is the accountability
+// spine of the agentic layer: what it read, what it changed, and under whose
+// authority.
+model ToolInvocation {
+  id        String @id @default(cuid())
+  runId     String
+  run       AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  messageId String?
+  message   SupportMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  toolName String
+  input    Json     @default("{}")
+  output   Json     @default("{}")
+  // WRITE tools mutate customer state and are the ones that need approval.
+  effect   ToolEffect @default(READ)
+  status   ToolStatus @default(OK)
+  // Set when a write tool required, and got, human sign-off.
+  approvedByUserId String?
+  errorMessage String?
+  latencyMs    Int?
+  createdAt    DateTime @default(now())
+
+  @@index([runId, createdAt])
+  @@index([toolName, createdAt])
+}
+
+enum ToolEffect {
+  READ
+  WRITE
+  EXTERNAL // sends something to the applicant or a third party
+}
+
+enum ToolStatus {
+  OK
+  DENIED_BY_POLICY
+  NEEDS_APPROVAL
+  FAILED
+  TIMEOUT
+}
+
+model Escalation {
+  id       String        @id @default(cuid())
+  ticketId String
+  ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  reason      EscalationReason
+  detail      String?
+  // Confidence the agent had when it gave up; useful for tuning thresholds.
+  agentConfidence Float?
+  status      EscalationStatus @default(PENDING)
+
+  assigneeId String?
+  assignee   User?   @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  dueAt      DateTime?
+  acceptedAt DateTime?
+  resolvedAt DateTime?
+  // What the human did, fed back as a training signal.
+  humanResolution String?
+  createdAt  DateTime @default(now())
+
+  @@index([status, dueAt])
+  @@index([ticketId])
+}
+
+enum EscalationReason {
+  LOW_CONFIDENCE
+  POLICY_REQUIRES_HUMAN // e.g. any final rejection appeal
+  APPLICANT_REQUESTED
+  REGULATORY_DECISION // SAR, sanctions match confirmation
+  SENTIMENT_NEGATIVE
+  REPEAT_CONTACT
+  TOOL_FAILURE
+  MAX_TURNS_REACHED
+  SUSPECTED_FRAUD
+  COMPLAINT
+  DATA_SUBJECT_RIGHTS
+}
+
+enum EscalationStatus {
+  PENDING
+  ACCEPTED
+  RESOLVED
+  RETURNED_TO_AGENT
+  CANCELLED
+}
+
+model KnowledgeArticle {
+  id       String @id @default(cuid())
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  slug    String
+  title   String
+  body    String
+  // Which intents this article is a candidate answer for.
+  intents SupportIntent[] @default([])
+  locale  String          @default("en")
+  tags    String[]        @default([])
+  // Keyword index; a real deployment adds embeddings + pgvector.
+  keywords String[]       @default([])
+  isPublished Boolean     @default(true)
+  version  Int            @default(1)
+  updatedAt DateTime      @updatedAt
+  createdAt DateTime      @default(now())
+
+  @@unique([tenantId, slug, locale])
+  @@index([locale, isPublished])
+}
+
+// ---------------------------------------------------------------------------
+// Audit & compliance
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id       String  @id @default(cuid())
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  actorType ActorType
+  actorId   String?
+  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  action       String // "applicant.approved", "rule.updated", "pii.viewed"
+  resourceType String
+  resourceId   String?
+  // Before/after for mutations. PII values are hashed, not stored plain.
+  before Json?
+  after  Json?
+
+  ipAddress String?
+  userAgent String?
+  requestId String?
+  // Tamper-evident chain: sha256(prevHash + canonical(entry)).
+  prevHash  String?
+  hash      String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([actorId, createdAt])
+}
+
+model Report {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  type       ReportType
+  status     ReportStatus @default(QUEUED)
+  parameters Json         @default("{}")
+  format     String       @default("csv")
+  storageKey String?
+  rowCount   Int?
+  requestedBy String?
+  errorMessage String?
+  createdAt  DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([tenantId, type, createdAt])
+}
+
+enum ReportType {
+  APPLICANT_EXPORT
+  DECISION_AUDIT
+  SAR_PACKAGE
+  SCREENING_SUMMARY
+  TRANSACTION_MONITORING
+  CONVERSION_FUNNEL
+  AGENT_PERFORMANCE
+  REGULATORY_PERIODIC
+  DATA_SUBJECT_ACCESS
+}
+
+enum ReportStatus {
+  QUEUED
+  RUNNING
+  READY
+  FAILED
+  EXPIRED
+}
+
+// Idempotency ledger for POSTs, so a retried client request cannot create a
+// second applicant or a second decision.
+model IdempotencyRecord {
+  key        String   @id
+  tenantId   String
+  endpoint   String
+  requestHash String
+  statusCode Int?
+  response   Json?
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+
+  @@index([expiresAt])
+}
