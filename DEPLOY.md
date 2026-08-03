@@ -110,6 +110,26 @@ The WebSDK is a library, not a hosted page. Embed it in your own page:
 Camera capture needs a secure context. Over HTTPS it works; over plain HTTP it
 silently falls back to file upload.
 
+## Sanctions data
+
+The seeded watchlist is nine rows, enough to demonstrate matching. Real
+screening needs the published lists:
+
+```bash
+DATABASE_URL="<your Render external connection string>" npm run watchlist:refresh
+```
+
+That pulls OFAC SDN, the UN consolidated list and the EU consolidated list —
+roughly 55MB of XML and tens of thousands of entries. Run it from a workstation
+rather than the free-tier container, which does not have the memory to parse
+them.
+
+Re-run it weekly or so. Entries that disappear from a source are marked inactive
+rather than deleted, so historical hits stay explainable.
+
+**PEP screening is not included.** There is no free authoritative source; the
+commercial registers are the product. The seeded PEP rows are illustrative only.
+
 ## Storage
 
 `STORAGE_DRIVER=local` writes uploads to the container's `/tmp`, which Render

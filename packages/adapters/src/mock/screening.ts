@@ -54,6 +54,9 @@ export interface WatchlistSource {
   }): Promise<WatchlistCandidate[]>;
 }
 
+/** Used when a caller supplies no usable threshold. Matches the level default. */
+const DEFAULT_FUZZINESS = 0.75;
+
 /** Corroboration weights, applied after the base name similarity. */
 const DOB_EXACT_BOOST = 0.12;
 const YOB_MATCH_BOOST = 0.05;
@@ -190,7 +193,14 @@ export class LocalScreeningAdapter implements ScreeningAdapter {
     }
 
     const suppressed = new Set(req.suppressedEntryIds ?? []);
-    const threshold = req.fuzziness;
+    // A missing or nonsensical threshold must not mean "match everything".
+    // `score < undefined` is false, so an omitted fuzziness would silently turn
+    // every scanned candidate into a hit — against the real consolidated lists
+    // that is tens of thousands of false positives, not a degraded result.
+    const threshold =
+      Number.isFinite(req.fuzziness) && req.fuzziness > 0 && req.fuzziness <= 1
+        ? req.fuzziness
+        : DEFAULT_FUZZINESS;
     const hits: ScreeningHit[] = [];
 
     for (const candidate of candidates) {

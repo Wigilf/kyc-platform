@@ -651,6 +651,13 @@ model WatchlistEntry {
   @@index([listType, isActive])
   @@index([tenantId, listType])
   @@index([fullName])
+  // The candidate pre-filter is an array-overlap on nameTokens. Against the
+  // nine seeded rows a sequential scan was free; against the real consolidated
+  // lists it is tens of thousands of rows on the path of every screening run.
+  @@index([nameTokens(ops: ArrayOps)], type: Gin)
+  // Identity of a row within its source list, so a refresh updates rather than
+  // duplicating. Null sourceRef (hand-added internal entries) is exempt.
+  @@unique([listName, sourceRef])
 }
 
 enum WatchlistType {

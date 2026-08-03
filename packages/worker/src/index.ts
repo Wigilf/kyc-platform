@@ -223,3 +223,6 @@ if (isEntrypoint) {
     process.exit(1);
   });
 }
+
+export { ingestAllSources, ingestSource, type IngestReport } from './watchlist/ingest.js';
+export { WATCHLIST_SOURCES } from './watchlist/sources.js';
