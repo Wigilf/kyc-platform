@@ -124,24 +124,41 @@ export async function runScreening(args: {
 
   const hits = result.data.hits;
 
-  // Which of these are genuinely new? A monitoring run should only alert on hits
-  // the analyst has not already seen for this applicant.
-  const previouslySeen = args.applicantId
-    ? new Set(
-        (
-          await prisma.amlHit.findMany({
-            where: { run: { applicantId: args.applicantId, id: { not: run.id } } },
-            select: { entryId: true },
-          })
-        )
-          .map((h) => h.entryId)
-          .filter((id): id is string => Boolean(id)),
-      )
-    : new Set<string>();
+  // What has this applicant's analyst already seen, and what did they decide?
+  //
+  // Every run records its own hit rows — that is the audit trail — but a hit the
+  // analyst has already dispositioned must not come back as OPEN. Re-opening it
+  // means a false positive cleared once reappears in the queue after every
+  // re-screen, and the queue fills with the same handful of people forever.
+  const priorByEntry = new Map<
+    string,
+    { status: string; resolution: string | null; note: string | null }
+  >();
+  if (args.applicantId) {
+    const prior = await prisma.amlHit.findMany({
+      where: { run: { applicantId: args.applicantId, id: { not: run.id } } },
+      select: { entryId: true, status: true, resolution: true, note: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    for (const p of prior) {
+      // Newest first, so the first sighting of an entry is its current disposition.
+      if (p.entryId && !priorByEntry.has(p.entryId)) {
+        priorByEntry.set(p.entryId, {
+          status: p.status,
+          resolution: p.resolution,
+          note: p.note,
+        });
+      }
+    }
+  }
 
   const created = await prisma.$transaction(
-    hits.map((hit) =>
-      prisma.amlHit.create({
+    hits.map((hit) => {
+      const prior = priorByEntry.get(hit.entryId);
+      // A prior disposition carries forward; only a genuinely unseen match, or one
+      // still awaiting a decision, lands in the queue as OPEN.
+      const settled = prior && prior.status !== 'OPEN' && prior.status !== 'IN_REVIEW';
+      return prisma.amlHit.create({
         data: {
           runId: run.id,
           entryId: hit.entryId,
@@ -150,17 +167,23 @@ export async function runScreening(args: {
           matchedName: hit.matchedName,
           matchScore: hit.matchScore,
           matchedFields: hit.matchedFields,
-          status: 'OPEN',
+          status: (settled ? prior.status : 'OPEN') as never,
+          resolution: (settled ? prior.resolution : null) as never,
+          // The analyst's own words, unaltered. Prefixing them each time would
+          // compound "carried forward from…" on every subsequent re-screen; that
+          // the disposition was inherited is recorded in the snapshot instead.
+          note: settled ? prior.note : null,
           snapshot: {
             ...hit.snapshot,
             pepTier: hit.pepTier,
             categories: hit.categories,
             positions: hit.positions,
-            isNew: !previouslySeen.has(hit.entryId),
+            isNew: !prior,
+            carriedForward: Boolean(settled),
           } as never,
         },
-      }),
-    ),
+      });
+    }),
   );
 
   const newHits = created.filter(
@@ -172,7 +195,8 @@ export async function runScreening(args: {
     data: {
       status: 'COMPLETED',
       hitCount: hits.length,
-      openHitCount: hits.length,
+      // Hits carried forward already dispositioned are not open work.
+      openHitCount: created.filter((h) => h.status === 'OPEN' || h.status === 'IN_REVIEW').length,
       provider: result.provider,
       completedAt: new Date(),
       raw: {
