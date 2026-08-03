@@ -12,6 +12,7 @@ import type {
   OcrAdapter,
   OcrRequest,
   OcrResult,
+  DeclaredSubjectSource,
 } from '../types.js';
 import {
   detectScenarios,
@@ -91,6 +92,8 @@ function docNumberFor(seed: string, country: string): string {
 export class MockOcrAdapter implements OcrAdapter {
   readonly name = 'mock-ocr';
 
+  constructor(private readonly declaredSubjects: DeclaredSubjectSource) {}
+
   async extract(
     req: OcrRequest,
     ctx: AdapterContext,
@@ -157,7 +160,9 @@ export class MockOcrAdapter implements OcrAdapter {
     // Echo the declared identity unless a scenario asks for a discrepancy.
     // Inventing a name here would make every applicant fail the pipeline's
     // declared-vs-extracted comparison, clean ones included.
-    const declared = req.declaredIdentity;
+    const declared = ctx.applicantId
+      ? await this.declaredSubjects.load(ctx.applicantId)
+      : null;
     const nameMismatch = hasScenario(scenarios, 'NAME_MISMATCH');
     const firstName =
       !nameMismatch && declared?.firstName

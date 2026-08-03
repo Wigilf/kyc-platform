@@ -7,7 +7,7 @@ import {
   sha256,
   verifyRequestSignature,
 } from '@kyc/core';
-import { prisma } from '@kyc/db';
+import { appendAuditEntry, prisma } from '@kyc/db';
 
 /**
  * Authentication.
@@ -293,39 +293,22 @@ export async function writeAudit(
   const caller = request.caller;
   if (!caller) return;
 
-  // Chained to the previous entry so a deleted or edited row breaks the chain.
-  const previous = await prisma.auditLog.findFirst({
-    where: { tenantId: caller.tenantId },
-    orderBy: { createdAt: 'desc' },
-    select: { hash: true },
-  });
-
-  const { auditHash } = await import('@kyc/core');
-  const payload = {
+  // Chaining, ordering, and the read-append race are handled by the shared
+  // writer, so an HTTP-originated entry and one written by the pipeline land in
+  // the same chain under the same rules.
+  await appendAuditEntry({
+    tenantId: caller.tenantId,
+    actorType:
+      caller.kind === 'user' ? 'USER' : caller.kind === 'applicant' ? 'APPLICANT' : 'API',
+    actorId: caller.kind === 'user' ? caller.userId : null,
     action: entry.action,
     resourceType: entry.resourceType,
     resourceId: entry.resourceId ?? null,
-    actorId: caller.kind === 'user' ? caller.userId : null,
-    at: new Date().toISOString(),
-  };
-
-  await prisma.auditLog.create({
-    data: {
-      tenantId: caller.tenantId,
-      actorType:
-        caller.kind === 'user' ? 'USER' : caller.kind === 'applicant' ? 'APPLICANT' : 'API',
-      actorId: caller.kind === 'user' ? caller.userId : null,
-      action: entry.action,
-      resourceType: entry.resourceType,
-      resourceId: entry.resourceId ?? null,
-      before: (entry.before ?? null) as never,
-      after: (entry.after ?? null) as never,
-      ipAddress: request.ip,
-      userAgent: String(request.headers['user-agent'] ?? ''),
-      requestId: request.id,
-      prevHash: previous?.hash ?? null,
-      hash: auditHash(previous?.hash ?? null, payload),
-    },
+    before: entry.before,
+    after: entry.after,
+    ipAddress: request.ip,
+    userAgent: String(request.headers['user-agent'] ?? ''),
+    requestId: request.id,
   });
 }
 

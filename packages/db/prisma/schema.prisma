@@ -1780,6 +1780,10 @@ model KnowledgeArticle {
 
 model AuditLog {
   id       String  @id @default(cuid())
+  // Monotonic within a tenant. The chain is ordered by this, not by createdAt:
+  // two entries written in the same millisecond order arbitrarily by timestamp,
+  // which is enough to make the tail ambiguous and fork the chain.
+  seq      BigInt  @default(autoincrement())
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -1802,6 +1806,7 @@ model AuditLog {
   hash      String?
   createdAt DateTime @default(now())
 
+  @@index([tenantId, seq])
   @@index([tenantId, createdAt])
   @@index([resourceType, resourceId])
   @@index([actorId, createdAt])

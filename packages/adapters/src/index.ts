@@ -9,7 +9,7 @@ import {
 } from './mock/signals.js';
 import { ConsoleNotificationAdapter } from './notifications.js';
 import { LocalStorageAdapter, S3StorageAdapter } from './storage.js';
-import type { AdapterRegistry, StorageAdapter } from './types.js';
+import type { AdapterRegistry, DeclaredSubjectSource, StorageAdapter } from './types.js';
 import type { WatchlistSource } from './mock/screening.js';
 
 export * from './types.js';
@@ -57,6 +57,14 @@ export interface AdapterConfig {
    * imported so @kyc/adapters stays free of a database dependency.
    */
   watchlistSource: WatchlistSource;
+  /**
+   * Supplies the applicant's declared identity to the *mock* adapters only, so
+   * they can emit documents and geolocation that agree with the applicant rather
+   * than inventing contradictions. Injected for the same reason as
+   * `watchlistSource`, and kept off the adapter request types so a live provider
+   * implementation cannot be handed declared PII it has no need for.
+   */
+  declaredSubjectSource?: DeclaredSubjectSource;
   logger?: (msg: string) => void;
 }
 
@@ -78,15 +86,17 @@ export function createAdapters(config: AdapterConfig): AdapterRegistry {
     );
   }
 
+  const declared = config.declaredSubjectSource ?? nullDeclaredSubjectSource();
+
   return {
-    ocr: new MockOcrAdapter(),
+    ocr: new MockOcrAdapter(declared),
     docAuth: new MockDocAuthAdapter(),
     liveness: new MockLivenessAdapter(),
     faceMatch: new MockFaceMatchAdapter(),
     nfc: new MockNfcAdapter(),
     screening: new LocalScreeningAdapter(config.watchlistSource),
     registry: new MockRegistryAdapter(),
-    device: new MockDeviceAdapter(),
+    device: new MockDeviceAdapter(declared),
     contactRisk: new MockContactRiskAdapter(),
     chain: new MockChainAnalysisAdapter(),
     storage: createStorage(config.storage),
@@ -108,4 +118,12 @@ export function createStorage(config: AdapterConfig['storage']): StorageAdapter 
 /** Empty source, for tests that do not care about screening. */
 export function emptyWatchlistSource(): WatchlistSource {
   return new InMemoryWatchlistSource([]);
+}
+
+/**
+ * Knows nothing about anyone. Mocks then invent an identity, which is the right
+ * behaviour for a caller that never told us who the applicant is.
+ */
+export function nullDeclaredSubjectSource(): DeclaredSubjectSource {
+  return { load: async () => null };
 }

@@ -7,7 +7,7 @@ import {
   toIvms101,
   validateInboundPayload,
 } from '@kyc/core';
-import { prisma } from '@kyc/db';
+import { prisma, verifyAuditChain } from '@kyc/db';
 import { enqueueTransaction } from '@kyc/worker';
 import { requireBackend, requireRole, writeAudit } from '../auth.js';
 
@@ -411,50 +411,10 @@ const transactionRoutes: FastifyPluginAsync = async (app) => {
    */
   app.get('/v1/audit/verify', async (request) => {
     const user = requireRole(request, 'AUDITOR');
-    const entries = await prisma.auditLog.findMany({
-      where: { tenantId: user.tenantId },
-      orderBy: { createdAt: 'asc' },
-      select: {
-        id: true,
-        prevHash: true,
-        hash: true,
-        action: true,
-        resourceType: true,
-        resourceId: true,
-        actorId: true,
-        createdAt: true,
-      },
-    });
-
-    const { auditHash } = await import('@kyc/core');
-    const breaks: Array<{ id: string; reason: string }> = [];
-    let previousHash: string | null = null;
-
-    for (const entry of entries) {
-      if (entry.prevHash !== previousHash) {
-        breaks.push({
-          id: entry.id,
-          reason: `prevHash does not match the preceding entry (an entry was deleted or reordered)`,
-        });
-      }
-      const expected = auditHash(entry.prevHash, {
-        action: entry.action,
-        resourceType: entry.resourceType,
-        resourceId: entry.resourceId,
-        actorId: entry.actorId,
-        at: entry.createdAt.toISOString(),
-      });
-      if (expected !== entry.hash) {
-        breaks.push({ id: entry.id, reason: 'hash does not match its content (entry was edited)' });
-      }
-      previousHash = entry.hash;
-    }
-
-    return {
-      entries: entries.length,
-      intact: breaks.length === 0,
-      breaks,
-    };
+    // Recomputation lives beside the writer in @kyc/db: a verifier that derives
+    // the hash differently from the writer reports honest entries as tampered,
+    // which is exactly what happened when the two drifted apart.
+    return verifyAuditChain(user.tenantId);
   });
 };
 

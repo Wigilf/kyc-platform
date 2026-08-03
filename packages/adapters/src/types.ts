@@ -63,23 +63,31 @@ export interface OcrRequest {
   documentType: string;
   /** Hint from the applicant; the adapter must still detect for itself. */
   expectedCountry?: string;
-  /**
-   * What the applicant told us about themselves.
-   *
-   * A real OCR provider reads the document and does not need this — the pipeline
-   * does the declared-vs-extracted comparison itself, and must keep doing so.
-   * The mock, however, has no document to read: without the declared values it
-   * can only invent a name and date of birth, which makes NAME_MISMATCH and
-   * DOB_MISMATCH fire for every applicant including the clean ones. Passing the
-   * hint lets the mock emit a document that agrees with the applicant unless a
-   * mismatch scenario deliberately asks otherwise.
-   */
-  declaredIdentity?: {
-    firstName?: string | null;
-    lastName?: string | null;
-    /** ISO yyyy-mm-dd. */
-    dob?: string | null;
-  };
+}
+
+/**
+ * What the applicant declared about themselves.
+ *
+ * Deliberately *not* part of any adapter request. A real provider reads the
+ * document and has no business receiving the applicant's declared name and date
+ * of birth — the pipeline does the declared-vs-extracted comparison itself, so
+ * sending it would be handing PII to a third party that does not need it.
+ *
+ * The mock adapters do need it: with no document to actually read they would
+ * otherwise invent an identity, and every applicant would fail the comparison.
+ * They obtain it through an injected source instead, the same way the screening
+ * adapter obtains watchlist candidates, so it reaches mock code and nothing else.
+ */
+export interface DeclaredSubject {
+  firstName?: string | null;
+  lastName?: string | null;
+  /** ISO yyyy-mm-dd. */
+  dob?: string | null;
+  country?: string | null;
+}
+
+export interface DeclaredSubjectSource {
+  load(applicantId: string): Promise<DeclaredSubject | null>;
 }
 
 export interface OcrResult {
@@ -363,14 +371,6 @@ export interface DeviceRequest {
   userAgent?: string;
   /** Client-collected signals from the SDK. */
   clientSignals?: Record<string, unknown>;
-  /**
-   * The country the applicant declared. A real geolocation provider resolves the
-   * IP and neither knows nor cares what was declared — the pipeline compares the
-   * two itself. The mock needs it for the same reason the OCR mock needs the
-   * declared name: with nothing to geolocate it would otherwise pick a country at
-   * random and report a geo mismatch for applicants who do not have one.
-   */
-  declaredCountry?: string;
 }
 
 export interface DeviceResult {

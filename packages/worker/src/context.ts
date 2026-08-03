@@ -1,4 +1,11 @@
-import { createAdapters, type AdapterRegistry, type WatchlistCandidate, type WatchlistSource } from '@kyc/adapters';
+import {
+  createAdapters,
+  type AdapterRegistry,
+  type DeclaredSubject,
+  type DeclaredSubjectSource,
+  type WatchlistCandidate,
+  type WatchlistSource,
+} from '@kyc/adapters';
 import { nameTokens } from '@kyc/core';
 import { prisma } from '@kyc/db';
 
@@ -84,6 +91,33 @@ export class PrismaWatchlistSource implements WatchlistSource {
   }
 }
 
+/**
+ * Supplies the applicant's own declared details to the mock adapters.
+ *
+ * Injected for the same reason as the watchlist source above — it keeps
+ * @kyc/adapters free of a database dependency — and, more importantly here, it
+ * keeps declared PII off the adapter request types. A live OCR or geolocation
+ * provider reads a document or an IP; it never receives the applicant's declared
+ * name and date of birth, because the pipeline does that comparison itself.
+ */
+export class PrismaDeclaredSubjectSource implements DeclaredSubjectSource {
+  constructor(private readonly tenantId: string) {}
+
+  async load(applicantId: string): Promise<DeclaredSubject | null> {
+    const applicant = await prisma.applicant.findFirst({
+      where: { id: applicantId, tenantId: this.tenantId },
+      select: { firstName: true, lastName: true, dob: true, country: true },
+    });
+    if (!applicant) return null;
+    return {
+      firstName: applicant.firstName,
+      lastName: applicant.lastName,
+      dob: applicant.dob ? applicant.dob.toISOString().slice(0, 10) : null,
+      country: applicant.country,
+    };
+  }
+}
+
 /** Adapter set for a tenant. Cached, because construction reads config. */
 const registryCache = new Map<string, AdapterRegistry>();
 
@@ -111,6 +145,7 @@ export function adaptersFor(tenantId: string): AdapterRegistry {
         : {}),
     },
     watchlistSource: new PrismaWatchlistSource(tenantId),
+    declaredSubjectSource: new PrismaDeclaredSubjectSource(tenantId),
     logger: (msg) => console.log(`[notify] ${msg}`),
   });
 

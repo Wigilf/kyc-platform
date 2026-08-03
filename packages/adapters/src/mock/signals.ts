@@ -6,6 +6,7 @@ import type {
   ContactRiskAdapter,
   ContactRiskRequest,
   ContactRiskResult,
+  DeclaredSubjectSource,
   DeviceAdapter,
   DeviceRequest,
   DeviceResult,
@@ -51,6 +52,8 @@ const IP_COUNTRY_BY_PREFIX: Record<string, string> = {
 export class MockDeviceAdapter implements DeviceAdapter {
   readonly name = 'mock-device';
 
+  constructor(private readonly declaredSubjects: DeclaredSubjectSource) {}
+
   async assess(
     req: DeviceRequest,
     ctx: AdapterContext,
@@ -72,8 +75,11 @@ export class MockDeviceAdapter implements DeviceAdapter {
     // Where the IP itself does not say, an applicant connecting from home is in
     // the country they declared. Picking at random instead flagged a geo mismatch
     // on roughly six applicants in seven, including clean ones.
+    const declared = ctx.applicantId
+      ? await this.declaredSubjects.load(ctx.applicantId)
+      : null;
     const inferredCountry =
-      normalizeCountry(req.declaredCountry) ??
+      normalizeCountry(declared?.country ?? undefined) ??
       seededPick(`${seed}:ipc`, ['GBR', 'DEU', 'FRA', 'NLD', 'ESP', 'ITA', 'USA']);
     const ipCountry = prefixMatch
       ? IP_COUNTRY_BY_PREFIX[prefixMatch]!

@@ -130,14 +130,35 @@ export async function runScreening(args: {
   // analyst has already dispositioned must not come back as OPEN. Re-opening it
   // means a false positive cleared once reappears in the queue after every
   // re-screen, and the queue fills with the same handful of people forever.
+  // A disposition is not permanent, though. Two things end it:
+  //
+  //  1. **The listing changed.** A cleared match is a judgement about a specific
+  //     listed entity as it stood. If the issuing body later adds an alias, a new
+  //     programme, or a date of birth, the analyst cleared something that no
+  //     longer exists and the match has to be looked at again.
+  //  2. **It got old.** Ongoing monitoring re-screens indefinitely, so without an
+  //     expiry a decision made once is never revisited for the life of the
+  //     relationship.
   const priorByEntry = new Map<
     string,
-    { status: string; resolution: string | null; note: string | null }
+    {
+      status: string;
+      resolution: string | null;
+      note: string | null;
+      resolvedAt: Date | null;
+    }
   >();
   if (args.applicantId) {
     const prior = await prisma.amlHit.findMany({
       where: { run: { applicantId: args.applicantId, id: { not: run.id } } },
-      select: { entryId: true, status: true, resolution: true, note: true, createdAt: true },
+      select: {
+        entryId: true,
+        status: true,
+        resolution: true,
+        note: true,
+        resolvedAt: true,
+        createdAt: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
     for (const p of prior) {
@@ -147,17 +168,47 @@ export async function runScreening(args: {
           status: p.status,
           resolution: p.resolution,
           note: p.note,
+          resolvedAt: p.resolvedAt ?? p.createdAt,
         });
       }
     }
   }
 
+  // When each matched listing was last amended.
+  const entryUpdatedAt = new Map<string, Date>(
+    (
+      await prisma.watchlistEntry.findMany({
+        where: { id: { in: [...new Set(hits.map((h) => h.entryId))] } },
+        select: { id: true, updatedAt: true },
+      })
+    ).map((e) => [e.id, e.updatedAt]),
+  );
+
+  const maxAgeDays = Number(process.env.SCREENING_DISPOSITION_MAX_AGE_DAYS ?? 365);
+  const staleBefore = new Date(Date.now() - maxAgeDays * 86_400_000);
+
+  /** Why a prior decision no longer holds, or null if it still does. */
+  function expiryReason(
+    prior: { status: string; resolvedAt: Date | null },
+    entryId: string,
+  ): string | null {
+    if (prior.status === 'OPEN' || prior.status === 'IN_REVIEW') return null;
+    const resolvedAt = prior.resolvedAt;
+    if (!resolvedAt) return 'DISPOSITION_UNDATED';
+    const changed = entryUpdatedAt.get(entryId);
+    if (changed && changed > resolvedAt) return 'LISTING_AMENDED';
+    if (resolvedAt < staleBefore) return 'DISPOSITION_EXPIRED';
+    return null;
+  }
+
   const created = await prisma.$transaction(
     hits.map((hit) => {
       const prior = priorByEntry.get(hit.entryId);
-      // A prior disposition carries forward; only a genuinely unseen match, or one
-      // still awaiting a decision, lands in the queue as OPEN.
-      const settled = prior && prior.status !== 'OPEN' && prior.status !== 'IN_REVIEW';
+      // A prior disposition carries forward unless it has expired. Anything
+      // unseen, undecided, or reopened lands in the queue as OPEN.
+      const reopenBecause = prior ? expiryReason(prior, hit.entryId) : null;
+      const settled =
+        prior && prior.status !== 'OPEN' && prior.status !== 'IN_REVIEW' && !reopenBecause;
       return prisma.amlHit.create({
         data: {
           runId: run.id,
@@ -180,6 +231,16 @@ export async function runScreening(args: {
             positions: hit.positions,
             isNew: !prior,
             carriedForward: Boolean(settled),
+            // The analyst needs to know they are re-reviewing something rather
+            // than seeing it for the first time, and why it came back.
+            ...(reopenBecause
+              ? {
+                  reopenedBecause: reopenBecause,
+                  previousResolution: prior?.resolution ?? null,
+                  previousNote: prior?.note ?? null,
+                  previouslyResolvedAt: prior?.resolvedAt?.toISOString() ?? null,
+                }
+              : {}),
           } as never,
         },
       });

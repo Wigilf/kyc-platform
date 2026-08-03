@@ -22,7 +22,7 @@ import {
   type StepDefinition,
 } from '@kyc/core';
 import { cosineSimilarity, embeddingBucket } from '@kyc/adapters';
-import { prisma } from '@kyc/db';
+import { appendAuditEntry, prisma } from '@kyc/db';
 import { adaptersFor, loadRules } from './context.js';
 import { emitEvent } from './webhooks.js';
 import { runScreening } from './screening.js';
@@ -271,11 +271,6 @@ async function runDocumentStep(
       })),
       documentType: document.type,
       expectedCountry: document.country ?? applicant.country ?? undefined,
-      declaredIdentity: {
-        firstName: applicant.firstName,
-        lastName: applicant.lastName,
-        dob: applicant.dob ? toDateOnly(applicant.dob) : null,
-      },
     },
     ctx,
   );
@@ -704,7 +699,6 @@ async function runDeviceStep(
       ipAddress: applicant.ipAddress ?? undefined,
       userAgent: applicant.userAgent ?? undefined,
       fingerprint: applicant.devices[0]?.fingerprint,
-      declaredCountry: applicant.country ?? undefined,
     },
     ctx,
   );
@@ -989,11 +983,6 @@ async function runProofOfAddressStep(
       images: doc.images.map((i) => ({ storageKey: i.storageKey, contentType: i.contentType })),
       documentType: doc.type,
       expectedCountry: applicant.country ?? undefined,
-      declaredIdentity: {
-        firstName: applicant.firstName,
-        lastName: applicant.lastName,
-        dob: applicant.dob ? toDateOnly(applicant.dob) : null,
-      },
     },
     ctx,
   );
@@ -1331,6 +1320,29 @@ export async function finalize(
                 .join('; '),
         riskScoreAtDecision: assessment.score,
         firedRuleIds: evaluation.fired.filter((f) => !f.isShadow).map((f) => f.ruleId),
+      },
+    });
+
+    // An automated decision is as consequential as a human one — a final
+    // rejection is a legal position either way — so it belongs in the same
+    // tamper-evident chain, attributed to SYSTEM and carrying the rules that
+    // produced it. Without this, the audit log could show a reviewer opening a
+    // record but never show who or what rejected them.
+    await appendAuditEntry({
+      tenantId,
+      actorType: 'SYSTEM',
+      action: `applicant.${decision.toLowerCase()}`,
+      resourceType: 'Applicant',
+      resourceId: applicant.id,
+      before: { reviewStatus: applicant.reviewStatus, riskScore: applicant.riskScore },
+      after: {
+        reviewStatus,
+        riskScore: assessment.score,
+        riskLevel: assessment.level,
+        ddLevel: assessment.ddLevel,
+        rejectLabels: decision === 'APPROVED' ? [] : rejectLabels,
+        firedRules: evaluation.fired.filter((f) => !f.isShadow).map((f) => f.ruleName),
+        decidedBy: 'verification-pipeline',
       },
     });
   }

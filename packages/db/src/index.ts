@@ -54,3 +54,12 @@ export async function withRetry<T>(
   }
   throw lastError;
 }
+
+export {
+  appendAuditEntry,
+  auditPayload,
+  verifyAuditChain,
+  type AuditActorType,
+  type AuditChainBreak,
+  type AuditEntryInput,
+} from './audit.js';

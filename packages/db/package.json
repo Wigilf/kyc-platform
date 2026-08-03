@@ -20,6 +20,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@kyc/core": "*",
     "@prisma/client": "^6.1.0"
   },
   "devDependencies": {
