@@ -2,6 +2,7 @@ export * from './errors.js';
 export * from './crypto.js';
 export * from './normalize.js';
 export * from './countries.js';
+export * from './iso3166.js';
 export * from './reject-labels.js';
 export * from './levels.js';
 export * from './state-machine.js';

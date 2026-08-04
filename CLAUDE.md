@@ -56,7 +56,7 @@ Break these and something important stops being true, usually silently.
 npm run bootstrap   # containers, migrations, seed data
 npm run dev         # api + worker + reviewer console
 npm run dev:verify  # the public verification page
-npm test            # 65 tests; needs the local database running
+npm test            # 80 tests; needs the local database running
 ```
 
 Sign in to the console with `compliance@acme.test` and the password from
@@ -84,9 +84,39 @@ Sharp edges that have already caught me out:
 
 - **Real:** sanctions screening, against 26,440 live entries from OFAC, the EU
   and the UN. Refresh with `npm run watchlist:refresh`.
-- **Simulated:** document reading, liveness, face matching. These need a paid
-  vendor.
+- **Real:** reading a passport or ID card. Tesseract transcribes the
+  machine-readable zone and the ICAO 9303 check digits are verified, so a
+  document that does not add up is caught. `ADAPTER_OCR=tesseract` turns it on;
+  `mock` is the default. It reads only the MRZ — the printed fields are not
+  transcribed, because nothing would detect a misread.
+- **Simulated:** liveness and face matching. These need a paid vendor.
+- **Absent:** document authenticity. Deciding whether a passport is a forgery
+  needs a licensed library of what every document version from every country
+  looks like. Reading a document is not authenticating one, and a competent
+  forgery carries a perfectly valid MRZ — computing check digits is arithmetic.
 - **Absent:** PEP screening (politically exposed persons). No free authoritative
   source exists; the commercial registers are the product.
 
 Do not describe this as able to verify a real person's identity. It cannot yet.
+
+### The document reader
+
+`packages/adapters/src/live/ocr-tesseract.ts`. Things worth knowing before
+changing it:
+
+- **It costs about 220MB resident**, which on a 512MB instance is most of the
+  headroom. It starts on the first document and releases after five idle
+  minutes. Images are processed at 1600px wide because memory, not accuracy, is
+  the binding constraint.
+- **Repairs are gated on the check digits.** OCR misreads the zone constantly,
+  so candidate corrections are generated and only ones that make the arithmetic
+  work are accepted — and even then the read is marked repaired and its
+  confidence discounted. Never accept a repair that has not validated.
+- **Absent and wrong check digits are different findings.** `MRZ_INCOMPLETE`
+  means the photo lost them; `MRZ_CHECK_DIGIT_FAILED` means they are there and
+  do not add up. Collapsing the two either cries fraud at blurred corners or
+  waves through a doctored zone.
+- **Nothing read must never mean nothing wrong.** Every other document check is
+  a comparison, and an empty read fails none of them. The pipeline's
+  `DOCUMENT_UNREADABLE` label exists for that; `packages/worker/test/pipeline-real-ocr.test.ts`
+  guards it.

@@ -127,6 +127,9 @@ export function adaptersFor(tenantId: string): AdapterRegistry {
 
   const registry = createAdapters({
     mode: (process.env.ADAPTER_MODE ?? 'mock') as 'mock' | 'live',
+    // Real document reading is opt-in on its own switch, so it can be turned on
+    // without implying the checks that still are not real.
+    ocr: (process.env.ADAPTER_OCR ?? 'mock') as 'mock' | 'tesseract',
     storage: {
       driver: (process.env.STORAGE_DRIVER ?? 'local') as 'local' | 's3',
       localDir: process.env.STORAGE_LOCAL_DIR ?? './.data/uploads',

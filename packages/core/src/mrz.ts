@@ -67,10 +67,24 @@ export function computeCheckDigit(input: string): number {
   return sum % 10;
 }
 
-function verifyDigit(data: string, digit: string): boolean {
-  // '<' in a check-digit position means "not provided"; treat as unverifiable
-  // rather than failed, otherwise valid documents fail on optional groups.
-  if (digit === '<') return true;
+/**
+ * Verifies one check digit.
+ *
+ * `optional: true` is only correct where ICAO 9303 actually permits the digit to
+ * be filler — the optional-data group, and then only when that group is itself
+ * empty. Everywhere else a blank must fail.
+ *
+ * Treating a blank as a pass everywhere is how a zone with its check digits
+ * scrubbed out validates cleanly, which is the opposite of what the digits are
+ * for: an altered date of birth would only have to take the check digit with it.
+ * This did exactly that until it was fixed.
+ */
+function verifyDigit(data: string, digit: string, optional = false): boolean {
+  if (digit === '<') {
+    // Filler is only acceptable against an empty field.
+    return optional && /^<*$/.test(data);
+  }
+  if (!/^[0-9]$/.test(digit)) return false;
   const expected = computeCheckDigit(data);
   return String(expected) === digit;
 }
@@ -235,7 +249,7 @@ function parseTd3(
       documentNumber: verifyDigit(documentNumberRaw, documentNumberCd),
       dateOfBirth: verifyDigit(dobRaw, dobCd),
       dateOfExpiry: verifyDigit(expiryRaw, expiryCd),
-      personalNumber: verifyDigit(personalNumberRaw, personalNumberCd),
+      personalNumber: verifyDigit(personalNumberRaw, personalNumberCd, true),
       composite: verifyDigit(composite, compositeCd),
     },
   };

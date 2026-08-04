@@ -102,3 +102,56 @@ describe('parseMrz rejects tampering', () => {
     expect(parseMrz('not an mrz').valid).toBe(false);
   });
 });
+
+describe('blank check digits', () => {
+  /**
+   * A check digit that is not there cannot have been verified.
+   *
+   * This treated filler in any check-digit position as a pass, on the reasoning
+   * that optional groups legitimately carry none. The reasoning was right for
+   * the optional-data group and wrong everywhere else: it meant a zone with its
+   * mandatory digits scrubbed out validated cleanly, so altering a date of birth
+   * only required deleting the digit that would have caught it.
+   */
+  it('rejects a zone whose mandatory check digits have been blanked', () => {
+    const mrz = buildTd3Mrz({
+      issuingState: 'ITA',
+      surname: 'LOVELACE',
+      givenNames: 'ADA',
+      documentNumber: 'YA1234567',
+      nationality: 'ITA',
+      dateOfBirth: '1990-05-12',
+      sex: 'F',
+      dateOfExpiry: '2031-08-14',
+    });
+    expect(parseMrz(mrz).valid).toBe(true);
+
+    const lines = mrz.split('\n');
+    // Alter the birth date and remove the digit that protects it.
+    lines[1] = `${lines[1]!.slice(0, 13)}800512<${lines[1]!.slice(20)}`;
+
+    const parsed = parseMrz(lines.join('\n'));
+    expect(parsed.checkDigits!.dateOfBirth).toBe(false);
+    expect(parsed.valid).toBe(false);
+  });
+
+  it('still accepts filler against an empty optional-data group', () => {
+    // A passport with no personal number carries filler in both the group and
+    // its check digit, and is perfectly valid.
+    const mrz = buildTd3Mrz({
+      issuingState: 'GBR',
+      surname: 'HOPPER',
+      givenNames: 'GRACE',
+      documentNumber: '123456789',
+      nationality: 'GBR',
+      dateOfBirth: '1980-12-09',
+      sex: 'F',
+      dateOfExpiry: '2030-01-01',
+      personalNumber: '',
+    });
+
+    const parsed = parseMrz(mrz);
+    expect(parsed.checkDigits!.personalNumber).toBe(true);
+    expect(parsed.valid).toBe(true);
+  });
+});

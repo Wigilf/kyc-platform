@@ -7,6 +7,7 @@ import {
   MockContactRiskAdapter,
   MockDeviceAdapter,
 } from './mock/signals.js';
+import { TesseractOcrAdapter } from './live/ocr-tesseract.js';
 import { ConsoleNotificationAdapter } from './notifications.js';
 import { LocalStorageAdapter, S3StorageAdapter } from './storage.js';
 import type { AdapterRegistry, DeclaredSubjectSource, StorageAdapter } from './types.js';
@@ -17,6 +18,8 @@ export * from './deterministic.js';
 export * from './storage.js';
 export * from './notifications.js';
 export { MockOcrAdapter, MockDocAuthAdapter, MockNfcAdapter } from './mock/documents.js';
+export { TesseractOcrAdapter } from './live/ocr-tesseract.js';
+export type { TesseractOcrOptions } from './live/ocr-tesseract.js';
 export {
   MockLivenessAdapter,
   MockFaceMatchAdapter,
@@ -39,6 +42,16 @@ export {
 
 export interface AdapterConfig {
   mode: 'mock' | 'live';
+  /**
+   * Which document reader to use.
+   *
+   * Separate from `mode` because the capabilities are not all the same kind of
+   * problem. Reading a document is something this project can genuinely do;
+   * deciding whether one is forged is not, and no amount of code here changes
+   * that. Pinning them to a single switch would mean either shipping a real
+   * reader that nobody can turn on, or implying an authenticity check exists.
+   */
+  ocr?: 'mock' | 'tesseract';
   storage: {
     driver: 'local' | 's3';
     localDir?: string;
@@ -89,7 +102,13 @@ export function createAdapters(config: AdapterConfig): AdapterRegistry {
   const declared = config.declaredSubjectSource ?? nullDeclaredSubjectSource();
 
   return {
-    ocr: new MockOcrAdapter(declared),
+    ocr:
+      config.ocr === 'tesseract'
+        ? new TesseractOcrAdapter({
+            storage: createStorage(config.storage),
+            logger: config.logger,
+          })
+        : new MockOcrAdapter(declared),
     docAuth: new MockDocAuthAdapter(),
     liveness: new MockLivenessAdapter(),
     faceMatch: new MockFaceMatchAdapter(),

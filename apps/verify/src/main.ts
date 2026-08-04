@@ -71,7 +71,9 @@ function shell(...children: Node[]) {
       'div',
       { class: 'notice' },
       h('strong', {}, 'Demonstration. '),
-      'Documents and selfies are not really examined — do not upload a real ID. ' +
+      'Do not upload a real ID. Passports and ID cards are really read — the ' +
+        'machine-readable zone and its check digits — but nothing here judges ' +
+        'whether a document is genuine, and selfies are not really examined. ' +
         'Sanctions screening against the published OFAC, EU and UN lists is real.',
     ),
     h('div', { class: 'panel' }, ...children),
@@ -109,6 +111,20 @@ function renderIntro(error?: string) {
       'p',
       { style: 'font-size:13px;margin:14px 0 0;text-align:center' },
       'You can use your camera or upload files.',
+    ),
+    // Offered because the reader is real. Without a document that actually
+    // reads, a visitor with nothing to hand uploads a screenshot, is told
+    // truthfully that it could not be read, and concludes the thing is broken.
+    h(
+      'p',
+      { style: 'font-size:13px;margin:8px 0 0;text-align:center' },
+      'Nothing to hand? ',
+      h(
+        'a',
+        { href: '/specimen-passport.png', download: 'specimen-passport.png' },
+        'Download a specimen passport',
+      ),
+      ' — a fictional document with a valid machine-readable zone.',
     ),
   );
 }

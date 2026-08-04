@@ -70,6 +70,14 @@ export interface FixtureOptions {
   lastName?: string;
   country?: string;
   dob?: string;
+  /**
+   * Bytes to store as the document image instead of the placeholder.
+   *
+   * Only matters to a real reader. The placeholder is one pixel, which the
+   * quality checks reject on sharpness alone — so a test that wants to prove
+   * what happens to a *well-taken photo of the wrong thing* has to supply one.
+   */
+  documentImage?: Buffer;
 }
 
 /**
@@ -129,6 +137,7 @@ export async function createApplicant(slug: string, opts: FixtureOptions = {}) {
         status: 'UPLOADED',
       },
     });
+    const bytes = spec.type === 'PASSPORT' ? (opts.documentImage ?? PNG_1X1) : PNG_1X1;
     const stored = await storage.put(
       documentStorageKey({
         tenantId: tenant.id,
@@ -137,7 +146,7 @@ export async function createApplicant(slug: string, opts: FixtureOptions = {}) {
         side: spec.side,
         extension: 'png',
       }),
-      PNG_1X1,
+      bytes,
       'image/png',
     );
     await prisma.documentImage.create({

@@ -348,7 +348,25 @@ async function runDocumentStep(
   if (similarity !== null && similarity < 0.85) mismatchLabels.push('NAME_MISMATCH');
   if (dob && applicant.dob && toDateOnly(applicant.dob) !== dob) mismatchLabels.push('DOB_MISMATCH');
 
-  const ocrLabels = [...qualityLabels, ...validityLabels, ...mismatchLabels];
+  // Nothing read is not the same as nothing wrong.
+  //
+  // Every label above describes a comparison that failed. A document the reader
+  // could make no sense of produces none of them — no name to mismatch, no date
+  // to check, no expiry to be past — and so used to come out the other side as a
+  // pass. With a simulated reader that never happened, because it always
+  // returned a plausible document; with a real one it is the normal outcome for
+  // a photo of a cat.
+  const readableLabels: string[] = [];
+  const readAnything = Boolean(number || dob || docName);
+  if (!readAnything) readableLabels.push('DOCUMENT_UNREADABLE');
+  else if (extracted.findings.some((f) => f.code === 'MRZ_INCOMPLETE')) {
+    readableLabels.push('MRZ_INCOMPLETE');
+  }
+  // A name we could not compare is a name we did not verify. Only applies once
+  // something was read, so an unreadable document reports the clearer label.
+  if (readAnything && declaredName && !docName) readableLabels.push('OBSCURED_DATA');
+
+  const ocrLabels = [...readableLabels, ...qualityLabels, ...validityLabels, ...mismatchLabels];
 
   await prisma.document.update({
     where: { id: document.id },

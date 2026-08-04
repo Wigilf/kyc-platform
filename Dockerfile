@@ -54,6 +54,11 @@ COPY --from=build /app/packages/agent/dist     packages/agent/dist
 COPY --from=build /app/packages/api/dist       packages/api/dist
 COPY --from=build /app/packages/worker/dist    packages/worker/dist
 
+# Tesseract's English training data. Shipped in the repository rather than
+# fetched at runtime: a document reader that downloads its model from a CDN
+# stops working when the CDN does, in a way nobody can reproduce locally.
+COPY packages/adapters/tessdata packages/adapters/tessdata
+
 # Migrations are applied at container start by the entrypoint, not at build.
 COPY packages/db/prisma packages/db/prisma
 COPY --from=build /app/node_modules/.bin/prisma node_modules/.bin/prisma

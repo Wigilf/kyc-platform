@@ -72,6 +72,16 @@ export const REJECT_LABELS: Record<string, RejectLabelDef> = Object.fromEntries(
     def('WRONG_DOCUMENT_TYPE', 'DOCUMENT_QUALITY', true, 0,
       'The document you uploaded is not one we accept for this step.',
       'Uploaded type not in the level\'s accepted list.'),
+    def('DOCUMENT_UNREADABLE', 'DOCUMENT_QUALITY', true, 0,
+      'We could not read your document. Please retake the photo of the whole page, ' +
+      'including the two lines of code at the bottom.',
+      'No usable identity data could be extracted. Distinct from a failed check: ' +
+      'nothing was read, so nothing was checked.'),
+    def('MRZ_INCOMPLETE', 'DOCUMENT_QUALITY', true, 5,
+      'Part of your document was cut off, so we could not fully verify it. Please ' +
+      'retake the photo with the whole page in frame.',
+      'Mandatory MRZ check digits absent from the read; the zone could not be ' +
+      'verified. Absence, not mismatch — see MRZ_CHECKSUM_FAILED for the latter.'),
     def('OBSCURED_DATA', 'DOCUMENT_QUALITY', true, 10,
       'Some details on your document were covered. Please retake the photo with nothing over it.',
       'Fingers, stickers, or overlays covering data fields.'),
