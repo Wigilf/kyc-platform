@@ -52,6 +52,16 @@ class TimeoutError extends Error {}
 /** Returned by the reader when the time budget ran out before anything was read. */
 const TIMED_OUT = Symbol('ocr-timed-out');
 
+/**
+ * How much of the budget the page-locating pass may spend.
+ *
+ * Exported so the split stays honest: it must leave the majority to the zoomed
+ * pass, which is the one that actually transcribes the zone.
+ */
+export function locateBudgetFor(totalMs: number): number {
+  return Math.min(totalMs * 0.4, 20_000);
+}
+
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -501,28 +511,36 @@ export class TesseractOcrAdapter implements OcrAdapter {
     const worker = await this.getWorker();
     const left = () => this.timeoutMs - (Date.now() - started);
 
-    let wide;
+    // The two passes are not equally important, so they do not get equal time.
+    //
+    // The first reads the whole page, and its job is really to find where the
+    // zone is; at page scale the characters are too small to transcribe
+    // reliably. The second reads that strip enlarged, and is where almost every
+    // successful read comes from. Splitting the budget evenly starved it on a
+    // slow instance — the page pass ate the lot, the zoom never ran, and
+    // documents that read perfectly well came back unreadable. So the page pass
+    // is capped, and whatever it leaves belongs to the zoom.
+    const locateBudget = locateBudgetFor(this.timeoutMs);
+
+    let wide = null;
     try {
       wide = await this.withTimeout(
         worker.recognize(prepared.full, {}, { text: true, blocks: true }),
         'full-page recognition',
-        left(),
+        locateBudget,
       );
     } catch (error) {
-      if (error instanceof TimeoutError) return TIMED_OUT;
-      throw error;
+      // Not fatal. Every ICAO document keeps its zone at the foot of the page,
+      // so there is a sensible place to look even when layout analysis did not
+      // finish in time.
+      if (!(error instanceof TimeoutError)) throw error;
     }
-    const first = interpret(wide.data.text, (wide.data.confidence ?? 0) / 100);
 
-    // Crop to where Tesseract actually saw the zone, not to a guess about where
-    // it ought to be. The first pass reads the whole page at whatever resolution
-    // the applicant's camera gave us, which for a phone photo leaves the MRZ
-    // characters barely a dozen pixels tall; the second reads just those lines,
-    // scaled up. That is where most of the accuracy comes from.
-    const band = mrzBand(wide.data.blocks, prepared.height);
+    const first = wide ? interpret(wide.data.text, (wide.data.confidence ?? 0) / 100) : null;
+    const band = mrzBand(wide?.data.blocks, prepared.height);
+
     let second: ReturnType<typeof interpret> = null;
-    // No point starting a pass there is not time to finish.
-    if (band && left() > 5_000) {
+    if (band && left() > 3_000) {
       const top = Math.max(0, band.top);
       const height = Math.min(prepared.height - top, band.height);
       if (height > 8) {
@@ -532,15 +550,9 @@ export class TesseractOcrAdapter implements OcrAdapter {
           .sharpen()
           .toBuffer();
         try {
-          const zoom = await this.withTimeout(
-            worker.recognize(cropped),
-            'zoomed recognition',
-            left(),
-          );
+          const zoom = await this.withTimeout(worker.recognize(cropped), 'zoomed recognition', left());
           second = interpret(zoom.data.text, (zoom.data.confidence ?? 0) / 100);
         } catch (error) {
-          // The wide pass may still have produced something usable, so keep it
-          // rather than throwing the whole read away.
           if (!(error instanceof TimeoutError)) throw error;
         }
       }
@@ -549,6 +561,7 @@ export class TesseractOcrAdapter implements OcrAdapter {
     const candidates = [second, first].filter(Boolean) as NonNullable<
       ReturnType<typeof interpret>
     >[];
+    if (candidates.length === 0) return wide ? null : TIMED_OUT;
     return candidates.find((c) => c.parsed.valid) ?? candidates[0] ?? null;
   }
 }
@@ -895,6 +908,11 @@ function mrzBand(
   blocks: unknown,
   imageHeight: number,
 ): { top: number; height: number } | null {
+  // No layout at all — the page pass ran out of time. Look where the zone
+  // always is.
+  if (blocks === undefined) {
+    return { top: Math.floor(imageHeight * 0.62), height: Math.ceil(imageHeight * 0.38) };
+  }
   const lines = collectLines(blocks).filter((line) => {
     const stripped = line.text.replace(/[^A-Z0-9<]/gi, '');
     return stripped.length >= 24 && (stripped.match(/</g) ?? []).length >= 2;

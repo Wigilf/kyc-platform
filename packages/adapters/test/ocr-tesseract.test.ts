@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { buildTd3Mrz, parseMrz } from '@kyc/core';
-import { TesseractOcrAdapter } from '../src/live/ocr-tesseract.js';
+import { TesseractOcrAdapter, locateBudgetFor } from '../src/live/ocr-tesseract.js';
 
 /**
  * Real OCR, against real pixels.
@@ -189,4 +189,24 @@ describe('running out of time', () => {
       await impatient.close();
     }
   }, 60_000);
+});
+
+describe('how the time budget is split', () => {
+  /**
+   * Guarding a regression that only showed up on slow hardware.
+   *
+   * When the two passes shared a budget evenly, the page-locating pass consumed
+   * it on a small shared instance and the zoomed pass — the one that actually
+   * transcribes the zone — never ran. Documents that read perfectly well in
+   * development came back unreadable in production.
+   */
+  it('leaves the majority to the pass that does the reading', () => {
+    for (const total of [10_000, 45_000, 120_000]) {
+      expect(locateBudgetFor(total)).toBeLessThan(total / 2);
+    }
+  });
+
+  it('does not let locating run away on a generous budget', () => {
+    expect(locateBudgetFor(10 * 60_000)).toBe(20_000);
+  });
 });
