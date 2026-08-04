@@ -1,28 +1,7 @@
 # Working on this project
 
-## Explaining your work
-
-I am not a programmer. After building anything, explain in plain English:
-
-- **What it does** — in terms of the product, not the code
-- **Where it lives** — which files, and what each is responsible for
-- **Why this approach** — what alternatives existed and why you rejected them
-- **What it costs** — limitations, things that will need revisiting
-
-Define technical terms the first time they appear. Avoid jargon where a plain
-word works. If a decision is genuinely mine to make, say so explicitly rather
-than choosing silently.
-
-Two things that follow from this:
-
-- **Tell me when something is only half-true.** "The deploy is live" and "the
-  deploy is live but the database has no tables" are different sentences, and
-  the second one is the useful one.
-- **Don't tell me something works until you have watched it work.** Building
-  without error is not evidence. Run it, look at the result, and say what you
-  saw.
-
----
+How I want work explained is in `~/.claude/CLAUDE.md` and applies everywhere.
+This file is the project-specific part.
 
 ## What this project is
 
