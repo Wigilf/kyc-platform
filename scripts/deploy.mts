@@ -193,13 +193,36 @@ const results: Array<{ name: string; deployId: string; ok: boolean; detail: stri
 for (const service of targets) {
   step(`Deploying ${service.name}`);
 
+  // Render does not always echo the created deploy: when one is already in
+  // flight for the service it can answer with an empty body, which previously
+  // became the string "undefined" and then a 404 on the next poll. Fall back to
+  // whatever the service's most recent deploy is.
   const created = await getJson(`${RENDER_API}/services/${service.id}/deploys`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: '{}',
   });
-  const deployId = String(created.id);
-  ok(`triggered ${deployId}`);
+
+  let deployId = typeof created.id === 'string' ? String(created.id) : '';
+  if (!deployId) {
+    const recent = (await getJson(
+      `${RENDER_API}/services/${service.id}/deploys?limit=1`,
+    )) as unknown as Array<{ deploy?: { id?: string } }>;
+    deployId = recent?.[0]?.deploy?.id ?? '';
+    if (!deployId) {
+      results.push({
+        name: service.name,
+        deployId: '(none)',
+        ok: false,
+        detail: `Render returned no deploy id: ${JSON.stringify(created).slice(0, 120)}`,
+      });
+      console.error(`  ✗ ${service.name}: could not determine the deploy to watch`);
+      continue;
+    }
+    ok(`already deploying — watching ${deployId}`);
+  } else {
+    ok(`triggered ${deployId}`);
+  }
 
   let status = '';
   let commit = '';
