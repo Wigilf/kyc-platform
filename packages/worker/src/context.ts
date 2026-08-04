@@ -130,6 +130,7 @@ export function adaptersFor(tenantId: string): AdapterRegistry {
     // Real document reading is opt-in on its own switch, so it can be turned on
     // without implying the checks that still are not real.
     ocr: (process.env.ADAPTER_OCR ?? 'mock') as 'mock' | 'tesseract',
+    ocrTimeoutMs: process.env.OCR_TIMEOUT_MS ? Number(process.env.OCR_TIMEOUT_MS) : undefined,
     storage: {
       driver: (process.env.STORAGE_DRIVER ?? 'local') as 'local' | 's3',
       localDir: process.env.STORAGE_LOCAL_DIR ?? './.data/uploads',

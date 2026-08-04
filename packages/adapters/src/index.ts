@@ -52,6 +52,11 @@ export interface AdapterConfig {
    * reader that nobody can turn on, or implying an authenticity check exists.
    */
   ocr?: 'mock' | 'tesseract';
+  /**
+   * Budget for reading one document image. Worth raising on slow hardware: a
+   * shared-CPU instance can take a hundred times longer than a laptop.
+   */
+  ocrTimeoutMs?: number;
   storage: {
     driver: 'local' | 's3';
     localDir?: string;
@@ -107,6 +112,7 @@ export function createAdapters(config: AdapterConfig): AdapterRegistry {
         ? new TesseractOcrAdapter({
             storage: createStorage(config.storage),
             logger: config.logger,
+            ...(config.ocrTimeoutMs ? { timeoutMs: config.ocrTimeoutMs } : {}),
           })
         : new MockOcrAdapter(declared),
     docAuth: new MockDocAuthAdapter(),

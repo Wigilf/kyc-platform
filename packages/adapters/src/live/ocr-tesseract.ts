@@ -511,28 +511,59 @@ export class TesseractOcrAdapter implements OcrAdapter {
     const worker = await this.getWorker();
     const left = () => this.timeoutMs - (Date.now() - started);
 
-    // The two passes are not equally important, so they do not get equal time.
+    // A pass that finished and found nothing is a different answer from a pass
+    // that never finished. Both produce no zone; only the second means "we ran
+    // out of time", and reporting a photograph of a wall as a timeout would
+    // send the applicant to retake a picture rather than tell them the truth.
+    let anyPassCompleted = false;
+
+    /** Reads one image. Returns null on timeout, which is not the same as nothing found. */
+    const attemptOn = async (image: Buffer, label: string, budget: number) => {
+      try {
+        const out = await this.withTimeout(worker.recognize(image), label, budget);
+        anyPassCompleted = true;
+        return interpret(out.data.text, (out.data.confidence ?? 0) / 100);
+      } catch (error) {
+        if (error instanceof TimeoutError) return null;
+        throw error;
+      }
+    };
+
+    // Look at the foot of the page first.
     //
-    // The first reads the whole page, and its job is really to find where the
-    // zone is; at page scale the characters are too small to transcribe
-    // reliably. The second reads that strip enlarged, and is where almost every
-    // successful read comes from. Splitting the budget evenly starved it on a
-    // slow instance — the page pass ate the lot, the zoom never ran, and
-    // documents that read perfectly well came back unreadable. So the page pass
-    // is capped, and whatever it leaves belongs to the zoom.
-    const locateBudget = locateBudgetFor(this.timeoutMs);
+    // Recognition cost scales with pixel count, and the machine-readable zone
+    // occupies the bottom fifth of every ICAO document. Reading the whole page
+    // to find it, then reading the strip again to transcribe it, is two passes
+    // over four times the pixels — which a laptop absorbs and a shared-CPU
+    // instance does not: the full-page approach exhausted a 45-second budget
+    // there on a document that reads in well under a second locally.
+    //
+    // So: crop, enlarge, read. If that produces a zone whose check digits
+    // validate, nothing else is needed, and the expensive path never runs.
+    const footTop = Math.floor(prepared.height * 0.58);
+    const foot = await sharp(prepared.full)
+      .extract({ left: 0, top: footTop, width: prepared.width, height: prepared.height - footTop })
+      .resize({ width: Math.min(2400, Math.round(prepared.width * 1.5)) })
+      .sharpen()
+      .toBuffer();
+
+    const quick = await attemptOn(foot, 'foot-of-page recognition', Math.min(left(), 25_000));
+    if (quick?.parsed.valid) return quick;
+
+    // Otherwise fall back to reading the page and locating the zone properly —
+    // the document may be photographed at an angle, or set within a larger
+    // frame, so that the zone is not where it usually is.
+    if (left() < 5_000) return quick ?? (anyPassCompleted ? null : TIMED_OUT);
 
     let wide = null;
     try {
       wide = await this.withTimeout(
         worker.recognize(prepared.full, {}, { text: true, blocks: true }),
         'full-page recognition',
-        locateBudget,
+        locateBudgetFor(left()),
       );
+      anyPassCompleted = true;
     } catch (error) {
-      // Not fatal. Every ICAO document keeps its zone at the foot of the page,
-      // so there is a sensible place to look even when layout analysis did not
-      // finish in time.
       if (!(error instanceof TimeoutError)) throw error;
     }
 
@@ -549,20 +580,15 @@ export class TesseractOcrAdapter implements OcrAdapter {
           .resize({ width: Math.min(3000, prepared.width * 2) })
           .sharpen()
           .toBuffer();
-        try {
-          const zoom = await this.withTimeout(worker.recognize(cropped), 'zoomed recognition', left());
-          second = interpret(zoom.data.text, (zoom.data.confidence ?? 0) / 100);
-        } catch (error) {
-          if (!(error instanceof TimeoutError)) throw error;
-        }
+        second = await attemptOn(cropped, 'zoomed recognition', left());
       }
     }
 
-    const candidates = [second, first].filter(Boolean) as NonNullable<
+    const candidates = [second, first, quick].filter(Boolean) as NonNullable<
       ReturnType<typeof interpret>
     >[];
-    if (candidates.length === 0) return wide ? null : TIMED_OUT;
-    return candidates.find((c) => c.parsed.valid) ?? candidates[0] ?? null;
+    if (candidates.length === 0) return anyPassCompleted ? null : TIMED_OUT;
+    return candidates.find((c) => c.parsed.valid) ?? candidates[0]!;
   }
 }
 
