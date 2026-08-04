@@ -163,3 +163,30 @@ describe('an altered document', () => {
     expect(parseMrz(result.data!.mrz!).valid).toBe(false);
   }, 60_000);
 });
+
+describe('running out of time', () => {
+  it('reports an unreadable document rather than an error the queue will retry', async () => {
+    // A budget nothing can meet. What matters is the shape of the answer, not
+    // the duration: `ok: false` makes the pipeline record a FAILED check, which
+    // means "our problem, run it again" — so the queue re-ran the same
+    // unreadable image until it gave up, and the applicant waited minutes for a
+    // conclusion that was never going to change.
+    const impatient = new TesseractOcrAdapter({ timeoutMs: 1 });
+    try {
+      const result = await impatient.extract(
+        {
+          images: [{ bytes: await dataPage(), contentType: 'image/png', side: 'PAGE' }],
+          documentType: 'PASSPORT',
+        },
+        ctx,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.error).toBeUndefined();
+      expect(result.data!.fields).toEqual({});
+      expect(codes(result)).toContain('OCR_TIMED_OUT');
+    } finally {
+      await impatient.close();
+    }
+  }, 60_000);
+});

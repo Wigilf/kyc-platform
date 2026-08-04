@@ -14,6 +14,26 @@
 
 export type MrzFormat = 'TD1' | 'TD2' | 'TD3';
 
+/**
+ * Document types that carry a machine-readable zone.
+ *
+ * Travel documents do, by treaty. Most other identity documents do not: a
+ * driving licence generally has a barcode or a chip instead, and a utility bill
+ * is a letter. A reader that expects an MRZ on those will find none — which is
+ * a fact about the document, not a fault in the applicant's photograph, and
+ * must not be reported as one.
+ */
+export const MRZ_DOCUMENT_TYPES: readonly string[] = [
+  'PASSPORT',
+  'ID_CARD',
+  'VISA',
+  'RESIDENCE_PERMIT',
+];
+
+export function hasMachineReadableZone(documentType: string): boolean {
+  return MRZ_DOCUMENT_TYPES.includes(documentType);
+}
+
 export interface MrzFields {
   format: MrzFormat;
   documentCode: string;

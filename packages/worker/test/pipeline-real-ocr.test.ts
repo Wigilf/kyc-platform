@@ -122,3 +122,43 @@ describe('a document the reader cannot read', () => {
     expect(document.expiryDate).toBeNull();
   }, 120_000);
 });
+
+describe('a document that has no machine-readable zone', () => {
+  it('is not reported as an unreadable photograph', async () => {
+    const { applicant, tenant } = await createApplicant('real-ocr-utility', {
+      documentImage: image,
+    });
+
+    await runVerificationPipeline({
+      tenantId: tenant.id,
+      applicantId: applicant.id,
+      trigger: 'SUBMITTED',
+    });
+
+    const check = await prisma.check.findFirstOrThrow({
+      where: { applicantId: applicant.id, type: 'PROOF_OF_ADDRESS' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Telling someone to retake a photo of a utility bill because the reader
+    // wants a passport's check digits sends them round a loop with no exit.
+    expect(check.rejectLabels).toContain('NOT_MACHINE_READABLE');
+    expect(check.rejectLabels).not.toContain('DOCUMENT_UNREADABLE');
+    // And it must not read as verified, because nothing about it was.
+    expect(check.result).not.toBe('PASS');
+  }, 120_000);
+
+  it('still keeps the applicant out of automatic approval', async () => {
+    const { applicant, tenant } = await createApplicant('real-ocr-utility-2', {
+      documentImage: image,
+    });
+
+    const result = await runVerificationPipeline({
+      tenantId: tenant.id,
+      applicantId: applicant.id,
+      trigger: 'SUBMITTED',
+    });
+
+    expect(result.reviewStatus).not.toBe('APPROVED');
+  }, 120_000);
+});

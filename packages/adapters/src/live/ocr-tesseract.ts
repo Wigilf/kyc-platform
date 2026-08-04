@@ -3,7 +3,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { createWorker, PSM, type Worker } from 'tesseract.js';
-import { computeCheckDigit, isKnownAlpha3, parseMrz, type MrzParseResult } from '@kyc/core';
+import {
+  computeCheckDigit,
+  hasMachineReadableZone,
+  isKnownAlpha3,
+  parseMrz,
+  type MrzParseResult,
+} from '@kyc/core';
 import type {
   AdapterContext,
   AdapterResult,
@@ -42,6 +48,9 @@ import type {
  */
 
 class TimeoutError extends Error {}
+
+/** Returned by the reader when the time budget ran out before anything was read. */
+const TIMED_OUT = Symbol('ocr-timed-out');
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -103,7 +112,7 @@ export interface TesseractOcrOptions {
   storage?: StorageAdapter;
   /** Where eng.traineddata lives. Defaults to the copy shipped in this package. */
   langPath?: string;
-  /** Give up on one image after this long. Default 30s. */
+  /** Total budget for reading one image, across both passes. Default 45s. */
   timeoutMs?: number;
   /**
    * Release the recognition engine after this long with no documents to read.
@@ -132,7 +141,7 @@ export class TesseractOcrAdapter implements OcrAdapter {
 
   constructor(private readonly options: TesseractOcrOptions = {}) {
     this.langPath = options.langPath ?? defaultLangPath();
-    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.timeoutMs = options.timeoutMs ?? 45_000;
     this.idleMs = options.idleMs ?? 300_000;
   }
 
@@ -215,6 +224,29 @@ export class TesseractOcrAdapter implements OcrAdapter {
       const bytes = await this.loadBytes(image);
       const prepared = await preprocess(bytes);
 
+      // A utility bill has no machine-readable zone, and neither does a driving
+      // licence. Running the reader at them and reporting "unreadable" would
+      // reject every legitimate proof of address — and take forty-five seconds
+      // of a shared CPU to do it. Say plainly that there is nothing here this
+      // reader can verify, and leave it to a person.
+      if (!hasMachineReadableZone(req.documentType)) {
+        findings.push({
+          code: 'NO_MACHINE_READABLE_ZONE',
+          severity: 'INFO',
+          message:
+            `A ${req.documentType.toLowerCase().replace(/_/g, ' ')} carries no machine-readable ` +
+            'zone, so this reader cannot verify it. It needs a human, or a provider that reads ' +
+            'printed fields.',
+        });
+        return {
+          ok: true,
+          provider: this.name,
+          latencyMs: Date.now() - started,
+          data: emptyResult(req.documentType, prepared.quality, findings),
+          raw: { engine: 'tesseract', skipped: 'no-mrz-document-type' },
+        };
+      }
+
       // A photo too blurred or too dark to read is a retake, not a rejection.
       // Saying so before spending time on OCR gets the applicant a faster answer.
       if (prepared.quality.sharpness < 0.08) {
@@ -238,8 +270,34 @@ export class TesseractOcrAdapter implements OcrAdapter {
         });
       }
 
-      const read = await this.readMrz(prepared);
+      const read = await this.readMrz(prepared, started);
       const latencyMs = Date.now() - started;
+
+      if (read === TIMED_OUT) {
+        // Out of time is an answer, not a fault.
+        //
+        // Returning an error here made the check FAILED, which is the pipeline's
+        // "our problem, retry it" state — so the queue re-ran the whole job,
+        // spent the budget again on the same unreadable image, and failed again.
+        // An applicant who uploaded a photograph of their lunch waited minutes
+        // for that. Whereas "we could not read this in the time available" is
+        // true, terminal, and lands them in front of a reviewer at once.
+        findings.push({
+          code: 'OCR_TIMED_OUT',
+          severity: 'MEDIUM',
+          message:
+            'Reading this image took longer than allowed, so it was not read. This ' +
+            'usually means the photo does not contain a document the reader recognises.',
+          detail: { budgetMs: this.timeoutMs },
+        });
+        return {
+          ok: true,
+          provider: this.name,
+          latencyMs,
+          data: emptyResult(req.documentType, prepared.quality, findings),
+          raw: { engine: 'tesseract', timedOut: true },
+        };
+      }
 
       if (!read) {
         findings.push({
@@ -380,7 +438,7 @@ export class TesseractOcrAdapter implements OcrAdapter {
       // should not reject an applicant.
       return this.failed(
         started,
-        error instanceof TimeoutError ? 'OCR_TIMEOUT' : 'OCR_FAILED',
+        'OCR_FAILED',
         error instanceof Error ? error.message : String(error),
         true,
       );
@@ -397,11 +455,11 @@ export class TesseractOcrAdapter implements OcrAdapter {
    * than a document does, and there is exactly one engine for the process — so
    * one pathological upload would otherwise stall every verification behind it.
    */
-  private withTimeout<T>(work: Promise<T>, label: string): Promise<T> {
+  private withTimeout<T>(work: Promise<T>, label: string, budgetMs: number): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new TimeoutError(`${label} exceeded ${this.timeoutMs}ms`)),
-        this.timeoutMs,
+        () => reject(new TimeoutError(`${label} exceeded ${Math.max(0, budgetMs)}ms`)),
+        Math.max(0, budgetMs),
       );
       work.then(resolve, reject).finally(() => clearTimeout(timer));
     });
@@ -439,13 +497,21 @@ export class TesseractOcrAdapter implements OcrAdapter {
    * neither validates, the one that at least parses is returned with the failure
    * recorded, because a reviewer can read a wrong MRZ and see what happened.
    */
-  private async readMrz(prepared: Preprocessed) {
+  private async readMrz(prepared: Preprocessed, started: number) {
     const worker = await this.getWorker();
+    const left = () => this.timeoutMs - (Date.now() - started);
 
-    const wide = await this.withTimeout(
-      worker.recognize(prepared.full, {}, { text: true, blocks: true }),
-      'full-page recognition',
-    );
+    let wide;
+    try {
+      wide = await this.withTimeout(
+        worker.recognize(prepared.full, {}, { text: true, blocks: true }),
+        'full-page recognition',
+        left(),
+      );
+    } catch (error) {
+      if (error instanceof TimeoutError) return TIMED_OUT;
+      throw error;
+    }
     const first = interpret(wide.data.text, (wide.data.confidence ?? 0) / 100);
 
     // Crop to where Tesseract actually saw the zone, not to a guess about where
@@ -455,7 +521,8 @@ export class TesseractOcrAdapter implements OcrAdapter {
     // scaled up. That is where most of the accuracy comes from.
     const band = mrzBand(wide.data.blocks, prepared.height);
     let second: ReturnType<typeof interpret> = null;
-    if (band) {
+    // No point starting a pass there is not time to finish.
+    if (band && left() > 5_000) {
       const top = Math.max(0, band.top);
       const height = Math.min(prepared.height - top, band.height);
       if (height > 8) {
@@ -464,8 +531,18 @@ export class TesseractOcrAdapter implements OcrAdapter {
           .resize({ width: Math.min(3000, prepared.width * 2) })
           .sharpen()
           .toBuffer();
-        const zoom = await this.withTimeout(worker.recognize(cropped), 'zoomed recognition');
-        second = interpret(zoom.data.text, (zoom.data.confidence ?? 0) / 100);
+        try {
+          const zoom = await this.withTimeout(
+            worker.recognize(cropped),
+            'zoomed recognition',
+            left(),
+          );
+          second = interpret(zoom.data.text, (zoom.data.confidence ?? 0) / 100);
+        } catch (error) {
+          // The wide pass may still have produced something usable, so keep it
+          // rather than throwing the whole read away.
+          if (!(error instanceof TimeoutError)) throw error;
+        }
       }
     }
 

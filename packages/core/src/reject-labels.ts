@@ -82,6 +82,12 @@ export const REJECT_LABELS: Record<string, RejectLabelDef> = Object.fromEntries(
       'retake the photo with the whole page in frame.',
       'Mandatory MRZ check digits absent from the read; the zone could not be ' +
       'verified. Absence, not mismatch — see MRZ_CHECKSUM_FAILED for the latter.'),
+    def('NOT_MACHINE_READABLE', 'DOCUMENT_QUALITY', false, 0,
+      'Thanks — a reviewer will check this document by hand.',
+      'The document type carries no machine-readable zone, so the automated ' +
+      'reader could verify nothing. Not a defect in the photograph and not the ' +
+      'applicant\'s to fix: it blocks automatic approval and routes to a human, ' +
+      'and carries no risk weight because nothing suspicious was observed.'),
     def('OBSCURED_DATA', 'DOCUMENT_QUALITY', true, 10,
       'Some details on your document were covered. Please retake the photo with nothing over it.',
       'Fingers, stickers, or overlays covering data fields.'),

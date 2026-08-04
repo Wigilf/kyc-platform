@@ -20,6 +20,7 @@ import {
   type ApplicantSnapshot,
   type RiskFactor,
   type StepDefinition,
+  hasMachineReadableZone,
 } from '@kyc/core';
 import { cosineSimilarity, embeddingBucket } from '@kyc/adapters';
 import { appendAuditEntry, prisma } from '@kyc/db';
@@ -358,8 +359,16 @@ async function runDocumentStep(
   // a photo of a cat.
   const readableLabels: string[] = [];
   const readAnything = Boolean(number || dob || docName);
-  if (!readAnything) readableLabels.push('DOCUMENT_UNREADABLE');
-  else if (extracted.findings.some((f) => f.code === 'MRZ_INCOMPLETE')) {
+  if (!readAnything) {
+    // Two different facts. A passport that could not be read is a bad
+    // photograph and the applicant can fix it. A utility bill was never going
+    // to be machine-read at all, and telling its owner to retake it sends them
+    // round a loop that cannot end. Neither is approved without a person
+    // looking, which is what a label with no risk weight achieves.
+    readableLabels.push(
+      hasMachineReadableZone(document.type) ? 'DOCUMENT_UNREADABLE' : 'NOT_MACHINE_READABLE',
+    );
+  } else if (extracted.findings.some((f) => f.code === 'MRZ_INCOMPLETE')) {
     readableLabels.push('MRZ_INCOMPLETE');
   }
   // A name we could not compare is a name we did not verify. Only applies once
@@ -1010,6 +1019,14 @@ async function runProofOfAddressStep(
   const ageDays = issued ? -(daysUntil(issued) ?? 0) : null;
   const labels: string[] = [];
   if (ageDays !== null && ageDays > maxAge) labels.push('PROOF_OF_ADDRESS_TOO_OLD');
+
+  // The whole point of a proof of address is that it is recent and it is
+  // theirs. With no date read and no address read, neither has been
+  // established — and "we checked nothing, so we found nothing wrong" is not a
+  // pass. The simulated reader always returned a date, so this only became
+  // reachable with a real one.
+  const verifiedAnything = Boolean(issued || ocr.data?.fields.address);
+  if (ocr.ok && !verifiedAnything) labels.push('NOT_MACHINE_READABLE');
 
   await recordCheck(applicant.id, doc.id, {
     type: 'PROOF_OF_ADDRESS',
