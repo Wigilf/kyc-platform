@@ -108,6 +108,26 @@ button.step-go::after {
   line-height: 1;
 }
 
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0 0 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--kyc-dim);
+  cursor: pointer;
+}
+.back-link:hover { color: var(--kyc-accent); }
+.back-link:focus-visible { outline: 2px solid var(--kyc-accent); outline-offset: 2px; border-radius: 4px; }
+
+/* A completed row stays reachable but reads as settled, not outstanding. */
+button.step-go.done { color: var(--kyc-dim); }
+button.step-go.done::after { content: ''; }
+
 .done-note {
   margin-left: auto;
   font-size: 11px;

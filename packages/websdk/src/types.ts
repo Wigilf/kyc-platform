@@ -71,6 +71,9 @@ export interface RequirementsResponse {
     satisfied: boolean;
     /** False for steps the platform performs itself, e.g. sanctions screening. */
     applicantFacing?: boolean;
+    /** Present for every step, so a completed one can be revisited. */
+    acceptedDocumentTypes?: string[];
+    requireBothSides?: boolean;
   }>;
 }
 

@@ -27,6 +27,20 @@ function normaliseBase(raw: string | undefined): string {
 
 const app = document.getElementById('app')!;
 
+/**
+ * Wakes the API as soon as the page loads.
+ *
+ * The page is static and served from a CDN, so it appears instantly; the API is
+ * a separate service that sleeps when idle and takes up to a minute to wake.
+ * Left until the button is clicked, that whole minute lands on the applicant
+ * while they stare at a spinner. Starting it now overlaps the wake with the time
+ * they spend reading, which is usually enough to hide it entirely.
+ */
+let apiWarm = false;
+const warming = fetch(`${API}/health`, { cache: 'no-store' })
+  .then(() => { apiWarm = true; })
+  .catch(() => { /* the real request will report any genuine problem */ });
+
 interface Session {
   token: string;
   applicantId: string;
@@ -102,7 +116,23 @@ function renderIntro(error?: string) {
 async function beginSession(button: HTMLButtonElement) {
   button.disabled = true;
   button.textContent = 'Starting…';
+
+  // A silent wait reads as a broken button. Say what is happening, but only if
+  // it actually takes long enough to worry about.
+  const explain = setTimeout(() => {
+    if (!apiWarm) {
+      button.textContent = 'Waking the service…';
+      const note = h(
+        'p',
+        { id: 'wake-note', style: 'font-size:13px;margin:12px 0 0;text-align:center' },
+        'This demo sleeps when nobody is using it. First start can take up to a minute.',
+      );
+      button.parentElement?.append(note);
+    }
+  }, 3000);
+
   try {
+    await warming.catch(() => undefined);
     const response = await fetch(`${API}/v1/demo/sessions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -112,9 +142,11 @@ async function beginSession(button: HTMLButtonElement) {
     if (!response.ok) {
       throw new Error(payload?.error?.message ?? `Could not start (${response.status})`);
     }
+    clearTimeout(explain);
     session = payload as Session;
     renderFlow();
   } catch (error) {
+    clearTimeout(explain);
     renderIntro(
       error instanceof Error
         ? `${error.message}. If the service was idle it may take up to a minute to wake — try again.`

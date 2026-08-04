@@ -569,6 +569,10 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
         label: stepLabel(s),
         required: s.required,
         satisfied: completed.has(s.id),
+        // Carried for every step, not only outstanding ones, so an applicant can
+        // go back and replace something they have already supplied.
+        acceptedDocumentTypes: documentTypesForStep(s),
+        requireBothSides: s.config.requireBothSides ?? false,
         // Screening and device intelligence are things we do, not things the
         // applicant does. A progress list that shows them leaves the applicant
         // looking at boxes they can never tick.

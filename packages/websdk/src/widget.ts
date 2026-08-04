@@ -226,11 +226,29 @@ export function mountWidget(options: KycMountOptions): KycHandle {
         row.addEventListener('click', () => beginStep(outstanding));
         li.append(row);
       } else {
-        li.append(
+        // Done, but not locked. Someone who photographed the wrong document, or
+        // mistyped their date of birth, needs a way to correct it without
+        // starting the whole verification again.
+        const redo = el('button', {
+          class: 'step-go done',
+          type: 'button',
+          'aria-label': `Change: ${label}`,
+        });
+        redo.append(
           el('span', { class: 'tick done' }, '✓'),
           el('span', {}, label),
-          el('span', { class: 'done-note' }, 'done'),
+          el('span', { class: 'done-note' }, 'change'),
         );
+        redo.addEventListener('click', () =>
+          beginStep({
+            id: step.id,
+            type: step.type,
+            label,
+            acceptedDocumentTypes: step.acceptedDocumentTypes ?? [],
+            requireBothSides: step.requireBothSides ?? false,
+          }),
+        );
+        li.append(redo);
       }
       list.append(li);
     }
@@ -260,10 +278,26 @@ export function mountWidget(options: KycMountOptions): KycHandle {
     }
   }
 
+  /** Returns to the checklist from anywhere, releasing whatever the step held. */
+  function backToChecklist() {
+    stopCamera();
+    if (view.kind === 'review') URL.revokeObjectURL(view.url);
+    notice = null;
+    view = { kind: 'checklist' };
+    render();
+  }
+
+  /** A consistent way out, placed first so it is where the eye already is. */
+  function backLink(): HTMLElement {
+    const back = el('button', { class: 'back-link', type: 'button' }, '← All steps');
+    back.addEventListener('click', backToChecklist);
+    return back;
+  }
+
   /**
    * Enters a step, whichever way the applicant asked for it — the row in the
-   * checklist or the button beneath it. Both go through here so they cannot
-   * drift apart.
+   * checklist, the button beneath it, or a completed row being redone. All go
+   * through here so they cannot drift apart.
    */
   function beginStep(step: Requirement) {
     notice = null;
@@ -281,6 +315,7 @@ export function mountWidget(options: KycMountOptions): KycHandle {
 
   function renderDetails(state: Extract<View, { kind: 'details' }>) {
     card.append(
+      backLink(),
       el('h2', {}, state.step.label),
       el('p', {}, 'These must match the document you are about to upload.'),
     );
@@ -342,6 +377,7 @@ export function mountWidget(options: KycMountOptions): KycHandle {
 
   function renderCapture(state: Extract<View, { kind: 'capture' }>) {
     card.append(
+      backLink(),
       el('h2', {}, state.step.label),
       el(
         'p',
@@ -364,28 +400,21 @@ export function mountWidget(options: KycMountOptions): KycHandle {
 
     const shoot = el('button', { class: 'primary' }, COPY.capture!);
     const pick = el('button', {}, COPY.choosePhoto!);
-    const cancel = el('button', {}, COPY.cancel!);
 
     shoot.addEventListener('click', () => {
       const blob = grabFrame(video);
       if (blob) void blob.then((b) => b && showReview(state, b));
     });
     pick.addEventListener('click', () => file.click());
-    cancel.addEventListener('click', () => {
-      stopCamera();
-      view = { kind: 'checklist' };
-      render();
-    });
-
     const actions = el('div', { class: 'actions' });
-    actions.append(shoot, pick, cancel);
+    actions.append(shoot, pick);
     card.append(actions, file);
 
     void openCamera(video, shoot);
   }
 
   function renderReview(state: Extract<View, { kind: 'review' }>) {
-    card.append(el('h2', {}, state.step.label));
+    card.append(backLink(), el('h2', {}, state.step.label));
     const img = el('img', { class: 'shot', src: state.url, alt: 'The photo you just took' });
     card.append(img, el('p', {}, 'Is everything readable?'));
 
