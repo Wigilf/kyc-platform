@@ -1,9 +1,10 @@
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { CaseRow } from '../api';
-import { Badge, ErrorNote, relativeTime, useApi } from '../components';
+import { Badge, ErrorNote, relativeTime, rowLink, useApi } from '../components';
 
 export default function Cases() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const queue = params.get('queue');
 
   const query = new URLSearchParams({ status: params.get('status') ?? 'OPEN' });
@@ -47,7 +48,10 @@ export default function Cases() {
               </thead>
               <tbody>
                 {data.cases.map((c) => (
-                  <tr key={c.id}>
+                  <tr
+                    key={c.id}
+                    {...(c.applicant ? rowLink(navigate, `/applicants/${c.applicant.id}`) : {})}
+                  >
                     <td className="mono">{c.reference}</td>
                     <td>
                       <Badge

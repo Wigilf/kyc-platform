@@ -1,6 +1,6 @@
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { ApplicantRow } from '../api';
-import { Badge, ErrorNote, relativeTime, riskTone, useApi } from '../components';
+import { Badge, ErrorNote, relativeTime, riskTone, rowLink, useApi } from '../components';
 
 const REVIEW_STATUSES = [
   'INIT',
@@ -15,6 +15,7 @@ const RISK_LEVELS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 export default function Applicants() {
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
 
   const query = new URLSearchParams();
   for (const key of ['reviewStatus', 'riskLevel', 'search']) {
@@ -102,7 +103,7 @@ export default function Applicants() {
               </thead>
               <tbody>
                 {data.applicants.map((a) => (
-                  <tr key={a.id}>
+                  <tr key={a.id} {...rowLink(navigate, `/applicants/${a.id}`)}>
                     <td>
                       <Link to={`/applicants/${a.id}`}>
                         {[a.firstName, a.lastName].filter(Boolean).join(' ') || '(no name)'}

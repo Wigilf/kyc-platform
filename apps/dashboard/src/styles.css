@@ -142,7 +142,13 @@ th {
   white-space: nowrap;
 }
 td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-tbody tr:hover { background: var(--surface-2); }
+/* Only rows that actually go somewhere. A hover highlight on an inert row says
+   "click me" and then does nothing — the Rules table had it on all fifty, and
+   cases with no applicant attached had it too. Cursor is set unconditionally so
+   the affordance is inspectable, not only visible mid-hover. */
+tbody tr.row-go { cursor: pointer; }
+tbody tr.row-go:hover { background: var(--surface-2); }
+tbody tr.row-go:focus-within { background: var(--surface-2); }
 tbody tr:last-child td { border-bottom: none; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .mono { font-family: var(--mono); font-size: 12px; }

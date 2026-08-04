@@ -1,8 +1,9 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { Funnel, QueueRow } from '../api';
-import { Badge, ErrorNote, Stat, useApi } from '../components';
+import { Badge, ErrorNote, Stat, rowLink, useApi } from '../components';
 
 export default function Overview() {
+  const navigate = useNavigate();
   const funnel = useApi<Funnel>('/v1/reports/funnel');
   const queues = useApi<{ queues: QueueRow[] }>('/v1/queues');
 
@@ -55,7 +56,7 @@ export default function Overview() {
                 {Object.entries(byStatus)
                   .sort((a, b) => b[1] - a[1])
                   .map(([status, count]) => (
-                    <tr key={status}>
+                    <tr key={status} {...rowLink(navigate, `/applicants?reviewStatus=${status}`)}>
                       <td>
                         <Link to={`/applicants?reviewStatus=${status}`}>
                           <Badge value={status} />
@@ -91,7 +92,7 @@ export default function Overview() {
               </thead>
               <tbody>
                 {queues.data.queues.map((q) => (
-                  <tr key={q.id}>
+                  <tr key={q.id} {...rowLink(navigate, `/cases?queue=${encodeURIComponent(q.name)}`)}>
                     <td>
                       <Link to={`/cases?queue=${encodeURIComponent(q.name)}`}>{q.name}</Link>
                       {q.isDefault ? <> <span className="badge info">default</span></> : null}

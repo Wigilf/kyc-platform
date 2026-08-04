@@ -1,6 +1,25 @@
 import type { ReactNode } from 'react';
+import type { MouseEvent } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, api } from './api';
+
+/**
+ * Makes a whole table row navigate, not just the link inside it.
+ *
+ * The link stays in the cell and remains the keyboard and screen-reader path;
+ * this only adds the mouse affordance a person expects from a dense table.
+ * Clicks that land on another control inside the row are left alone.
+ */
+export function rowLink(navigate: (to: string) => void, to: string) {
+  return {
+    className: 'row-go',
+    onClick: (event: MouseEvent<HTMLTableRowElement>) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('a, button, input, select, textarea, label')) return;
+      navigate(to);
+    },
+  };
+}
 
 /** Verdict colouring, in one place so a PASS is never green on one screen and grey on another. */
 export function tone(value: string | null | undefined): 'pass' | 'warn' | 'fail' | 'info' {
