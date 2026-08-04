@@ -167,7 +167,7 @@ export function mountWidget(options: KycMountOptions): KycHandle {
 
     // Shown on every screen, not just the first. Someone who lands mid-flow is
     // exactly the person who needs to know nothing here is a real check.
-    if (requirements?.simulated) {
+    if (requirements?.simulated && !options.hideSimulationNotice) {
       card.append(el('div', { class: 'note sim' }, COPY.simulated!));
     }
 
@@ -207,40 +207,40 @@ export function mountWidget(options: KycMountOptions): KycHandle {
     // Only what the applicant can actually act on. Older API builds omit the
     // flag, in which case fall back to whether the step is document-shaped.
     const visible = reqs.allSteps.filter((s) => s.applicantFacing !== false);
+
     for (const step of visible) {
-      const label =
-        step.label ?? reqs.outstanding.find((o) => o.id === step.id)?.label ?? humanise(step.type);
+      const outstanding = reqs.outstanding.find((o) => o.id === step.id);
+      const label = step.label ?? outstanding?.label ?? humanise(step.type);
       const li = el('li', { class: step.satisfied ? 'done' : '' });
-      li.append(
-        el('span', { class: `tick ${step.satisfied ? 'done' : ''}` }, step.satisfied ? '✓' : ''),
-        el('span', {}, label),
-      );
+
+      // An outstanding step is a real control, not decoration. It looked like
+      // one before — a numbered row in a list — but nothing happened on click,
+      // which is worse than not offering it at all.
+      if (outstanding) {
+        const row = el('button', {
+          class: 'step-go',
+          type: 'button',
+          'aria-label': `Start: ${label}`,
+        });
+        row.append(el('span', { class: 'tick' }, ''), el('span', {}, label));
+        row.addEventListener('click', () => beginStep(outstanding));
+        li.append(row);
+      } else {
+        li.append(
+          el('span', { class: 'tick done' }, '✓'),
+          el('span', {}, label),
+          el('span', { class: 'done-note' }, 'done'),
+        );
+      }
       list.append(li);
     }
     card.append(list);
 
     const next = reqs.outstanding[0];
     if (next) {
-      // No document satisfies this step, so it is asking for information.
-      if (next.acceptedDocumentTypes.length === 0) {
-        const button = el('button', { class: 'primary' }, `Add your ${next.label.toLowerCase()}`);
-        button.addEventListener('click', () => {
-          emit({ type: 'step_started', stepId: next.id });
-          notice = null;
-          view = { kind: 'details', step: next };
-          render();
-        });
-        card.append(button);
-        return;
-      }
-
-      const docType = next.acceptedDocumentTypes[0] ?? 'PASSPORT';
-      const side = next.requireBothSides ? 'FRONT_SIDE' : defaultSide(docType);
-      const button = el('button', { class: 'primary' }, `Add ${next.label.toLowerCase()}`);
-      button.addEventListener('click', () => {
-        emit({ type: 'step_started', stepId: next.id, documentType: docType });
-        startCapture(next, docType, side);
-      });
+      const verb = next.acceptedDocumentTypes.length === 0 ? 'Add your' : 'Add';
+      const button = el('button', { class: 'primary' }, `${verb} ${next.label.toLowerCase()}`);
+      button.addEventListener('click', () => beginStep(next));
       card.append(button);
       if (next.acceptedDocumentTypes.length > 1) {
         card.append(
@@ -258,6 +258,25 @@ export function mountWidget(options: KycMountOptions): KycHandle {
       submit.addEventListener('click', () => void doSubmit());
       card.append(submit);
     }
+  }
+
+  /**
+   * Enters a step, whichever way the applicant asked for it — the row in the
+   * checklist or the button beneath it. Both go through here so they cannot
+   * drift apart.
+   */
+  function beginStep(step: Requirement) {
+    notice = null;
+    if (step.acceptedDocumentTypes.length === 0) {
+      emit({ type: 'step_started', stepId: step.id });
+      view = { kind: 'details', step };
+      render();
+      return;
+    }
+    const docType = step.acceptedDocumentTypes[0] ?? 'PASSPORT';
+    const side = step.requireBothSides ? 'FRONT_SIDE' : defaultSide(docType);
+    emit({ type: 'step_started', stepId: step.id, documentType: docType });
+    startCapture(step, docType, side);
   }
 
   function renderDetails(state: Extract<View, { kind: 'details' }>) {

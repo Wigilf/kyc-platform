@@ -80,6 +80,7 @@ function renderIntro(error?: string) {
   shell(
     h('h1', {}, 'Verify your identity'),
     h('p', { class: 'lead' }, 'Four short steps. It usually takes two or three minutes.'),
+    h('p', { style: 'font-size:13.5px;margin:-8px 0 14px' }, "Here's what you'll be asked for — we'll walk you through them one at a time."),
     ...(error ? [h('div', { class: 'err' }, error)] : []),
     h(
       'ul',
@@ -132,6 +133,8 @@ function renderFlow() {
     token: session.token,
     applicantId: session.applicantId,
     apiBaseUrl: API,
+    // This page states it above the panel already.
+    hideSimulationNotice: true,
     onComplete: () => {
       // The decision is made by a worker consuming a queue, so it is not ready
       // the instant submit returns.

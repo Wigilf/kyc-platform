@@ -88,12 +88,17 @@ ul.what li {
   border-bottom: 1px solid var(--border);
 }
 ul.what li:last-child { border-bottom: none; }
+/* A plain numeral, not a chip. Rendered as a circular badge these read as
+   tappable options, and people tried to tap them — but this list is a preview
+   of what is coming, shown before a session even exists. */
 ul.what .n {
-  flex: 0 0 22px; height: 22px; border-radius: 50%;
-  background: var(--bg); color: var(--dim);
-  display: grid; place-items: center;
-  font-size: 12px; font-weight: 650;
+  flex: 0 0 18px;
+  color: var(--dim);
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
+ul.what .n::after { content: '.'; }
 
 button.cta {
   font: inherit; font-weight: 600; font-size: 15px;

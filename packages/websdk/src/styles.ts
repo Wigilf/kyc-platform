@@ -19,6 +19,7 @@ export const STYLES = /* css */ `
   --kyc-accent-fg: #ffffff;
   --kyc-ok: #1f7a4d;
   --kyc-ok-bg: #e3f4ea;
+  --kyc-accent-soft: rgba(47, 95, 208, 0.08);
   --kyc-err: #b3261e;
   --kyc-err-bg: #fbe6e5;
   --kyc-warn: #96690b;
@@ -75,6 +76,46 @@ ol.steps li {
 }
 ol.steps li:last-child { border-bottom: none; }
 ol.steps li.done { color: var(--kyc-dim); }
+
+/* An outstanding step is a button spanning the row. It has to look pressable —
+   the previous version rendered the same content as inert text, so people
+   clicked it and nothing happened. */
+button.step-go {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+button.step-go:hover { background: var(--kyc-accent-soft, rgba(47,95,208,0.08)); }
+button.step-go:hover .tick { border-color: var(--kyc-accent); }
+button.step-go:focus-visible { outline: 2px solid var(--kyc-accent); outline-offset: 1px; }
+/* A chevron, so the row reads as somewhere to go rather than a checkbox. */
+button.step-go::after {
+  content: '›';
+  margin-left: auto;
+  color: var(--kyc-dim);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.done-note {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--kyc-ok, #1f7a4d);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 .tick {
   flex: 0 0 20px;

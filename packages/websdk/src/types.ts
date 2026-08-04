@@ -15,6 +15,14 @@ export interface KycMountOptions {
   onComplete?: (result: { status: string; canResubmit: boolean }) => void;
   /** Fired for anything the widget could not recover from. */
   onError?: (error: Error) => void;
+  /**
+   * Suppress the widget's own "simulated checks" banner.
+   *
+   * Only set this when the surrounding page already carries the warning — the
+   * default is to show it, because a host that forgets is worse than a
+   * duplicate. Never set it to hide the fact.
+   */
+  hideSimulationNotice?: boolean;
   /** Fired on every step transition, for host-page analytics. */
   onEvent?: (event: KycEvent) => void;
 }
