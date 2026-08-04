@@ -66,17 +66,20 @@ jobs:
       - name: Generate the Prisma client
         run: npm run db:generate
 
+      # Before anything imports them: the seed reaches @kyc/db, which imports
+      # @kyc/core from dist. Building later meant the seed step could never work
+      # on a clean checkout.
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Apply migrations
         run: npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
 
       - name: Seed
         run: npx tsx packages/db/prisma/seed.ts
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
 
       - name: Test
         run: npx vitest run
