@@ -549,9 +549,30 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
 
     const completed = new Set(steps.filter(isSatisfied).map((s) => s.id));
 
+    // What the applicant already told us, handed back so a correction is a
+    // correction and not a retype. Only ever to the holder of this applicant's
+    // own record — assertOwnRecord above — and only the fields a form collects.
+    const address = declared.address as Record<string, unknown> | null | undefined;
+    const supplied: Record<string, string> = {};
+    for (const [field, value] of [
+      ['firstName', declared.firstName],
+      ['lastName', declared.lastName],
+      ['dob', applicant.dob ? applicant.dob.toISOString().slice(0, 10) : null],
+      ['country', declared.country],
+      ['nationality', declared.nationality],
+      ['email', declared.email],
+      ['phone', declared.phone],
+      ['addressLine1', address?.line1],
+      ['addressCity', address?.city],
+      ['addressPostCode', address?.postCode],
+    ] as const) {
+      if (typeof value === 'string' && value) supplied[field] = value;
+    }
+
     return {
       levelName: applicant.level.name,
       status: applicant.reviewStatus,
+      applicantData: supplied,
       // The widget shows this to the applicant. Someone being asked to
       // photograph their passport is entitled to know whether anything will
       // actually examine it.

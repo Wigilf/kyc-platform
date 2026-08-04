@@ -60,6 +60,8 @@ export interface Requirement {
 export interface RequirementsResponse {
   levelName: string;
   status: string;
+  /** Whatever the applicant has already supplied, for prefilling the form. */
+  applicantData?: Record<string, string>;
   /** True when no real document or biometric provider is wired in. */
   simulated?: boolean;
   outstanding: Requirement[];

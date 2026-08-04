@@ -339,6 +339,9 @@ export function mountWidget(options: KycMountOptions): KycHandle {
         autocomplete: spec.autocomplete,
       }) as HTMLInputElement;
       if (name === 'country') input.maxLength = 3;
+      // Coming back to fix one field should not mean typing the other seven again.
+      const known = requirements?.applicantData?.[name];
+      if (known) input.value = known;
       form.append(label, input);
     }
 
