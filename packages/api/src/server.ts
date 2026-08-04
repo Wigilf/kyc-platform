@@ -86,7 +86,12 @@ export async function buildServer() {
       };
       const requested = hostOf(origin);
       if (allowed.some((entry) => hostOf(entry) === requested)) return cb(null, true);
-      cb(new Error('Origin not allowed'), false);
+
+      // Refuse by withholding the header, not by throwing. CORS is enforced by
+      // the browser, so omitting Access-Control-Allow-Origin is what actually
+      // blocks the caller; throwing here surfaced as a 500 INTERNAL, which reads
+      // as a server fault and buries the real reason.
+      cb(null, false);
     },
     credentials: true,
     exposedHeaders: ['x-request-id'],
