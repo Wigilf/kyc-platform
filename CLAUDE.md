@@ -59,9 +59,14 @@ npm run dev:verify  # the public verification page
 npm test            # 65 tests; needs the local database running
 ```
 
-Sign in to the console with `compliance@acme.test` / `demo1234`.
+Sign in to the console with `compliance@acme.test` and the password from
+`SEED_PASSWORD` (locally it defaults to `dev-only-local-password`). The live
+deployment's password is in `.render-secrets.local`, which is gitignored.
 
 ## Deployment
+
+**The production database expires 2 September 2026** — free Render Postgres.
+A verified backup is in `backups/` (gitignored). See LAUNCH.md.
 
 Live on Render in the **KYC** project. `DEPLOY.md` has the detail, including the
 free-tier limits worth knowing before sharing a link.

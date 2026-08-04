@@ -3,6 +3,15 @@
 An honest assessment of what must be true before real people upload real
 identity documents to this system. Written 4 August 2026.
 
+> ## ⚠ The database expires on **2 September 2026**
+>
+> Free Render Postgres. On that date the data is deleted and does not come
+> back. A verified backup exists in `backups/` (restored and row-checked on
+> 4 August), so nothing is lost if the date is missed — but the live service
+> stops working until a new database is provisioned.
+>
+> Either upgrade to a paid plan (about $6/month) or diary the restore.
+
 **Summary: this cannot be launched today, and the reason is not polish.** The
 identity verification is simulated. Everything around it — the pipeline, the
 rules, the audit trail, the review workflow, the sanctions screening — is real
@@ -66,8 +75,9 @@ pointed at a separate sandbox tenant.
 
 ### 1.5 Published credentials
 
-`compliance@acme.test` / `demo1234` appears in this repository. The seeded
-operator accounts exist on the live deployment.
+The seeded operator accounts exist on the live deployment. The password used to
+be hardcoded in the seed and therefore published here; it has been rotated and
+the seed now requires `SEED_PASSWORD`, refusing to run in production without it.
 
 **What it needs:** the seed must not run against production; the demo accounts
 removed; real accounts created with real passwords. Better still, put SSO in

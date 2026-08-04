@@ -66,11 +66,11 @@ curl https://kyc-api-XXXX.onrender.com/health
 curl https://kyc-api-XXXX.onrender.com/ready     # also checks the database
 ```
 
-Then open the dashboard URL and sign in with `compliance@acme.test` /
-`demo1234`.
+Then open the dashboard URL and sign in with `compliance@acme.test` and the
+value of `SEED_PASSWORD` you seeded with.
 
-**Change that password before sharing the URL.** The seeded accounts are
-public knowledge — they are in this repository.
+**Never seed production without setting `SEED_PASSWORD`.** The seed refuses to
+run in production without it, because anything hardcoded here is public.
 
 ## Environment variables
 

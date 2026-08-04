@@ -34,7 +34,16 @@ async function main() {
   console.log(`  levels, queues, rules: ${ALL_DEFAULT_RULES.length} rules`);
 
   // --- Operators, one per role so the RBAC boundaries can actually be tested ---
-  const password = 'demo1234';
+  // Never hardcode this: whatever is here ends up in the repository, and the
+  // seeded accounts are real accounts on whatever database this runs against.
+  // Local development gets a throwaway default; anything else must supply one.
+  const password = process.env.SEED_PASSWORD ?? 'dev-only-local-password';
+  if (!process.env.SEED_PASSWORD && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'SEED_PASSWORD must be set when seeding a production database. ' +
+        'Generate one and keep it out of version control.',
+    );
+  }
   const users = [
     { email: 'owner@acme.test', name: 'Dana Owner', role: 'OWNER' as const },
     { email: 'admin@acme.test', name: 'Alex Admin', role: 'ADMIN' as const },

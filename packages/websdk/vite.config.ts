@@ -38,7 +38,7 @@ function tokenHarness(): Plugin {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               email: process.env.HARNESS_EMAIL ?? 'compliance@acme.test',
-              password: process.env.HARNESS_PASSWORD ?? 'demo1234',
+              password: process.env.HARNESS_PASSWORD ?? process.env.SEED_PASSWORD ?? 'dev-only-local-password',
             }),
           });
           const session = await login.json();
