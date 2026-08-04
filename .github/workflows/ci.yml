@@ -1,0 +1,104 @@
+name: CI
+
+# Every push and every pull request. The test suite talks to a real Postgres and
+# Redis rather than mocks of them, because the bugs this project has actually
+# shipped were in how records are read back — a mocked database would have
+# reproduced none of them.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kyc
+          POSTGRES_PASSWORD: kyc
+          POSTGRES_DB: kyc
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U kyc -d kyc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['6380:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://kyc:kyc@localhost:5433/kyc?schema=public
+      REDIS_URL: redis://localhost:6380
+      # Test-only values. The API refuses to start in production with
+      # placeholders, and NODE_ENV is not production here.
+      APP_SECRET: ci-secret-not-used-in-production-0000000000000000
+      WEBHOOK_SIGNING_SECRET: ci-webhook-secret
+      PII_ENCRYPTION_KEY: '1111111111111111111111111111111111111111111111111111111111111111'
+      ADAPTER_MODE: mock
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_DIR: ./.data/uploads
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generate the Prisma client
+        run: npm run db:generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
+
+      - name: Seed
+        run: npx tsx packages/db/prisma/seed.ts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npx vitest run
+
+      # A migration that only works because the local database already had the
+      # tables is not a migration. Prove it applies to an empty one.
+      - name: Migrations apply from empty
+        run: |
+          PGPASSWORD=kyc psql -h localhost -p 5433 -U kyc -d postgres -c 'CREATE DATABASE kyc_fresh;'
+          DATABASE_URL=postgresql://kyc:kyc@localhost:5433/kyc_fresh?schema=public \
+            npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
+          COUNT=$(PGPASSWORD=kyc psql -h localhost -p 5433 -U kyc -d kyc_fresh -tAc \
+            "select count(*) from information_schema.tables where table_schema='public';")
+          echo "tables created: $COUNT"
+          test "$COUNT" -gt 40
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # The image is what Render actually runs, so a build failure here is a
+      # deploy failure found before deploying.
+      - name: Build the API image
+        run: docker build -t kyc-api:ci .
