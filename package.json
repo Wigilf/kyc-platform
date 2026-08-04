@@ -36,7 +36,8 @@
     "lint": "tsc --noEmit -p tsconfig.base.json || true",
     "watchlist:refresh": "dotenv -e .env -- tsx --max-old-space-size=4096 scripts/refresh-watchlist.ts",
     "build:verify": "npm run -w @kyc/verify build",
-    "dev:verify": "npm run -w @kyc/verify dev"
+    "dev:verify": "npm run -w @kyc/verify dev",
+    "deploy": "dotenv -e .env -- tsx scripts/deploy.mts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
