@@ -190,53 +190,64 @@ if (!visible) fail('GitHub still does not report this commit on main after 60s.'
 
 const results: Array<{ name: string; deployId: string; ok: boolean; detail: string }> = [];
 
-for (const service of targets) {
-  step(`Deploying ${service.name}`);
+/** Waits for a deploy to reach a terminal state and reports what it built. */
+async function settle(serviceId: string, deployId: string): Promise<{ status: string; commit: string }> {
+  const deadline = Date.now() + 15 * 60_000;
+  while (Date.now() < deadline) {
+    const deploy = await getJson(`${RENDER_API}/services/${serviceId}/deploys/${deployId}`);
+    const status = String(deploy.status);
+    const commit = String((deploy.commit as { id?: string } | undefined)?.id ?? '');
+    if (['live', 'build_failed', 'update_failed', 'canceled'].includes(status)) {
+      return { status, commit };
+    }
+    await sleep(10_000);
+  }
+  return { status: 'timeout', commit: '' };
+}
 
-  // Render does not always echo the created deploy: when one is already in
-  // flight for the service it can answer with an empty body, which previously
-  // became the string "undefined" and then a 404 on the next poll. Fall back to
-  // whatever the service's most recent deploy is.
-  const created = await getJson(`${RENDER_API}/services/${service.id}/deploys`, {
+/** Starts a deploy, or adopts the in-flight one if Render returns no body. */
+async function trigger(serviceId: string): Promise<string> {
+  const created = await getJson(`${RENDER_API}/services/${serviceId}/deploys`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: '{}',
   });
+  if (typeof created.id === 'string') return created.id;
 
-  let deployId = typeof created.id === 'string' ? String(created.id) : '';
-  if (!deployId) {
-    const recent = (await getJson(
-      `${RENDER_API}/services/${service.id}/deploys?limit=1`,
-    )) as unknown as Array<{ deploy?: { id?: string } }>;
-    deployId = recent?.[0]?.deploy?.id ?? '';
-    if (!deployId) {
-      results.push({
-        name: service.name,
-        deployId: '(none)',
-        ok: false,
-        detail: `Render returned no deploy id: ${JSON.stringify(created).slice(0, 120)}`,
-      });
-      console.error(`  ✗ ${service.name}: could not determine the deploy to watch`);
-      continue;
-    }
-    ok(`already deploying — watching ${deployId}`);
-  } else {
-    ok(`triggered ${deployId}`);
-  }
+  const recent = (await getJson(
+    `${RENDER_API}/services/${serviceId}/deploys?limit=1`,
+  )) as unknown as Array<{ deploy?: { id?: string } }>;
+  return recent?.[0]?.deploy?.id ?? '';
+}
 
+for (const service of targets) {
+  step(`Deploying ${service.name}`);
+
+  let deployId = '';
   let status = '';
   let commit = '';
-  const deadline = Date.now() + 15 * 60_000;
-  while (Date.now() < deadline) {
-    const deploy = await getJson(`${RENDER_API}/services/${service.id}/deploys/${deployId}`);
-    status = String(deploy.status);
-    commit = String((deploy.commit as { id?: string } | undefined)?.id ?? '');
-    if (['live', 'build_failed', 'update_failed', 'canceled'].includes(status)) break;
-    await sleep(10_000);
+
+  // Up to three rounds. A deploy already in flight is usually for the previous
+  // commit — adopting it and asserting the hash is how the first run reported a
+  // failure that was really just bad timing. Let it finish, then start ours.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    deployId = await trigger(service.id);
+    if (!deployId) {
+      status = 'no-deploy-id';
+      break;
+    }
+    ({ status, commit } = await settle(service.id, deployId));
+    if (status !== 'live') break;
+    if (commit === head) break;
+
+    if (attempt < 3) {
+      ok(`that run built ${commit.slice(0, 7)} (an earlier commit) — starting ours`);
+      await sleep(3000);
+    }
   }
 
   if (status !== 'live') {
-    results.push({ name: service.name, deployId, ok: false, detail: `status ${status}` });
+    results.push({ name: service.name, deployId: deployId || '(none)', ok: false, detail: `status ${status}` });
     console.error(`  ✗ ${service.name}: ${status}`);
     continue;
   }
@@ -249,9 +260,7 @@ for (const service of targets) {
       ok: false,
       detail: `built ${commit.slice(0, 7)}, expected ${head.slice(0, 7)}`,
     });
-    console.error(
-      `  ✗ ${service.name}: deployed ${commit.slice(0, 7)} but HEAD is ${head.slice(0, 7)}`,
-    );
+    console.error(`  ✗ ${service.name}: deployed ${commit.slice(0, 7)} but HEAD is ${head.slice(0, 7)}`);
     continue;
   }
   ok(`live on ${commit.slice(0, 7)}`);
