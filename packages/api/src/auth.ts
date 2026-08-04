@@ -199,7 +199,10 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
       path === '/ready' ||
       path === '/openapi.json' ||
       path.startsWith('/docs') ||
-      path === '/v1/auth/login'
+      path === '/v1/auth/login' ||
+      // Public only when DEMO_MODE is on. Enumerated here rather than matched by
+      // prefix so a future /v1/demo/* route cannot become public by accident.
+      (path === '/v1/demo/sessions' && process.env.DEMO_MODE === 'true')
     ) {
       return;
     }

@@ -10,6 +10,7 @@ import { authPlugin, replyError } from './auth.js';
 import applicantsRoutes from './routes/applicants.js';
 import decisionRoutes from './routes/decisions.js';
 import configRoutes from './routes/config.js';
+import demoRoutes from './routes/demo.js';
 import kybRoutes from './routes/kyb.js';
 import supportRoutes from './routes/support.js';
 import transactionRoutes from './routes/transactions.js';
@@ -275,6 +276,7 @@ export async function buildServer() {
   await app.register(kybRoutes);
   await app.register(supportRoutes);
   await app.register(transactionRoutes);
+  await app.register(demoRoutes);
 
   // --- Machine-readable API description ---
   app.get('/openapi.json', async () => {

@@ -1,0 +1,15 @@
+{
+  // Declaration emit only. The bundle itself is produced by Vite; this exists so
+  // consumers get the types that package.json already promises at
+  // ./dist/index.d.ts — which nothing was generating.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "./dist",
+    "allowImportingTsExtensions": false
+  },
+  "include": ["src"]
+}

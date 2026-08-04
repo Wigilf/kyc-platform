@@ -54,6 +54,10 @@ services:
         value: 'true'
       - key: ADAPTER_MODE
         value: mock
+      # Exposes POST /v1/demo/sessions unauthenticated so the hosted flow can
+      # start a verification. Only appropriate for a demonstration deployment.
+      - key: DEMO_MODE
+        value: 'true'
       - key: STORAGE_DRIVER
         value: local
       - key: STORAGE_LOCAL_DIR
@@ -104,6 +108,31 @@ services:
       - path: /*
         name: X-Frame-Options
         value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+
+  # --- Hosted verification flow (public, no login) ---------------------------
+  - name: kyc-verify
+    type: web
+    runtime: static
+    buildCommand: npm ci && npm run build:websdk && npm run build:verify
+    staticPublishPath: ./apps/verify/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          name: kyc-api
+          type: web
+          property: host
+      - key: VITE_CONSOLE_URL
+        fromService:
+          name: kyc-dashboard
+          type: web
+          property: host
+    headers:
       - path: /*
         name: X-Content-Type-Options
         value: nosniff
