@@ -193,13 +193,29 @@ function renderFlow() {
 
 async function pollOutcome() {
   if (!session) return;
-  shell(
-    h('h2', {}, 'Checking your details'),
-    h('p', {}, 'Running document, biometric and sanctions checks. This takes a few seconds.'),
-    h('div', { class: 'spinner' }, 'Working…'),
-  );
+  const waiting = (note: string) =>
+    shell(
+      h('h2', {}, 'Checking your details'),
+      h('p', {}, 'Reading your document, then running the biometric and sanctions checks.'),
+      h('div', { class: 'spinner' }, 'Working…'),
+      h('p', { style: 'font-size:13px;text-align:center;margin:12px 0 0' }, note),
+    );
 
-  for (let attempt = 0; attempt < 30; attempt++) {
+  waiting('Usually under a minute.');
+
+  // Five minutes, not sixty seconds.
+  //
+  // The old budget was thirty polls two seconds apart, from when the document
+  // reader was simulated and returned instantly. Reading a real document on a
+  // small shared instance takes tens of seconds per image, and a photo the
+  // reader cannot make sense of takes the longest of all — so the page gave up
+  // at sixty seconds on a verification that finished at seventy-one, and showed
+  // "this is taking longer than expected" for a decision that had already been
+  // made. Polling gently for five minutes costs nothing and covers it.
+  const deadline = Date.now() + 5 * 60 * 1000;
+  let elapsed = 0;
+
+  while (Date.now() < deadline) {
     try {
       const response = await fetch(`${API}/v1/demo/outcome/${session.applicantId}`, {
         headers: { authorization: `Bearer ${session.token}` },
@@ -212,9 +228,17 @@ async function pollOutcome() {
         }
       }
     } catch {
-      // Transient; keep polling until the budget runs out.
+      // Transient; keep polling until the deadline.
     }
-    await new Promise((r) => setTimeout(r, 2000));
+
+    // Tight at first, because most answers arrive quickly; slower afterwards,
+    // so a long wait is not also a hammering.
+    const interval = elapsed < 30_000 ? 2000 : 5000;
+    await new Promise((r) => setTimeout(r, interval));
+    elapsed += interval;
+
+    if (elapsed === 30_000) waiting('Still reading the document — this one is taking a while.');
+    if (elapsed === 120_000) waiting('Still going. You can leave this page open.');
   }
 
   renderOutcome(null);
@@ -281,7 +305,12 @@ function renderOutcome(outcome: Outcome | null) {
   if (!outcome) {
     shell(
       h('h2', {}, 'Still processing'),
-      h('p', {}, 'This is taking longer than expected. Your submission was received.'),
+      h(
+        'p',
+        {},
+        'Your submission was received and the checks are still running — nothing has ' +
+          'been lost. Reload this page in a minute to see the outcome.',
+      ),
       startOver(),
     );
     return;
