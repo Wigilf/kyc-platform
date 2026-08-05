@@ -600,6 +600,15 @@ export class TesseractOcrAdapter implements OcrAdapter {
     // pass takes a fifth of a second, and mean on a throttled instance where
     // the same pass takes a minute — there it cut off the pass most likely to
     // succeed, and left the slower fallbacks to fail in its place.
+    if (this.options.debugText) {
+      const cropMeta = await sharp(foot).metadata();
+      this.options.logger?.(
+        `[ocr] geometry: page ${prepared.width}x${prepared.height}, ` +
+          `crop from y=${footTop} -> ${cropMeta.width}x${cropMeta.height}, ` +
+          `${Math.round((foot.length / 1024))}kB`,
+      );
+    }
+
     const quick = await attemptOn(foot, 'foot-of-page', Math.min(left(), this.timeoutMs * 0.5));
     if (quick?.parsed.valid) return quick;
 
