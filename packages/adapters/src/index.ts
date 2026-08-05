@@ -57,6 +57,8 @@ export interface AdapterConfig {
    * shared-CPU instance can take a hundred times longer than a laptop.
    */
   ocrTimeoutMs?: number;
+  /** Logs raw recognised text. Debugging only — it is passport contents. */
+  ocrDebugText?: boolean;
   storage: {
     driver: 'local' | 's3';
     localDir?: string;
@@ -113,6 +115,7 @@ export function createAdapters(config: AdapterConfig): AdapterRegistry {
             storage: createStorage(config.storage),
             logger: config.logger,
             ...(config.ocrTimeoutMs ? { timeoutMs: config.ocrTimeoutMs } : {}),
+            debugText: config.ocrDebugText ?? false,
           })
         : new MockOcrAdapter(declared),
     docAuth: new MockDocAuthAdapter(),

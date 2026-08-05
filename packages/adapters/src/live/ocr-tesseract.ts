@@ -130,6 +130,15 @@ export interface TesseractOcrOptions {
    * Default 5 minutes; 0 keeps it resident.
    */
   idleMs?: number;
+  /**
+   * Log the raw text each pass produced.
+   *
+   * Off by default and it must stay that way outside debugging: that text is
+   * the contents of somebody's passport. Only worth turning on against a
+   * specimen, to answer "did the reader see the zone and reject it, or not see
+   * it at all" — which cannot be told apart from the outside.
+   */
+  debugText?: boolean;
   logger?: (msg: string) => void;
 }
 
@@ -545,6 +554,11 @@ export class TesseractOcrAdapter implements OcrAdapter {
           `[ocr] ${label}: ${Date.now() - at}ms of ${Math.round(budget)}ms, ` +
             `${read ? (read.parsed.valid ? 'valid zone' : 'zone did not validate') : 'nothing zone-shaped'}`,
         );
+        if (this.options.debugText) {
+          this.options.logger?.(
+            `[ocr] ${label} raw: ${JSON.stringify(out.data.text).slice(0, 300)}`,
+          );
+        }
         return read;
       } catch (error) {
         if (error instanceof TimeoutError) {

@@ -131,6 +131,7 @@ export function adaptersFor(tenantId: string): AdapterRegistry {
     // without implying the checks that still are not real.
     ocr: (process.env.ADAPTER_OCR ?? 'mock') as 'mock' | 'tesseract',
     ocrTimeoutMs: process.env.OCR_TIMEOUT_MS ? Number(process.env.OCR_TIMEOUT_MS) : undefined,
+    ocrDebugText: process.env.OCR_DEBUG_TEXT === 'true',
     storage: {
       driver: (process.env.STORAGE_DRIVER ?? 'local') as 'local' | 's3',
       localDir: process.env.STORAGE_LOCAL_DIR ?? './.data/uploads',
