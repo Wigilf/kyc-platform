@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
@@ -164,6 +165,7 @@ export class TesseractOcrAdapter implements OcrAdapter {
    * a deployment that never reads one from paying for it.
    */
   private getWorker(): Promise<Worker> {
+    const startedAt = Date.now();
     this.worker ??= createWorker(
       'eng',
       1,
@@ -171,8 +173,13 @@ export class TesseractOcrAdapter implements OcrAdapter {
         langPath: this.langPath,
         gzip: false,
         // Everything local. A verification that silently depends on a CDN being
-        // up is a verification that fails in ways nobody can debug.
-        cachePath: this.langPath,
+        // up is a verification that fails in ways nobody can debug — and this
+        // one did: the container runs as an unprivileged user against a
+        // root-owned /app, so writing the cache next to the training data
+        // failed, and the fallback is a network fetch. Cache somewhere writable
+        // and never look outward.
+        cachePath: tmpdir(),
+        cacheMethod: 'none',
         logger: () => {},
       },
       // Set at initialisation because Tesseract loads its dictionaries then and
@@ -184,6 +191,11 @@ export class TesseractOcrAdapter implements OcrAdapter {
         tessedit_char_whitelist: MRZ_CHARSET,
         tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
       });
+      // Logged because starting the engine is the one part of reading a
+      // document that is slow for reasons unrelated to the document, and it is
+      // invisible from the outside — a slow start looks exactly like a slow
+      // read.
+      this.options.logger?.(`[ocr] engine ready in ${Date.now() - startedAt}ms`);
       return worker;
     });
     return this.worker;
@@ -508,8 +520,13 @@ export class TesseractOcrAdapter implements OcrAdapter {
    * recorded, because a reviewer can read a wrong MRZ and see what happened.
    */
   private async readMrz(prepared: Preprocessed, started: number) {
+    // Started before the clock, deliberately. Bringing up the engine is a
+    // once-per-process cost of tens of seconds on a small instance, and
+    // charging it to the first applicant's budget meant their document was
+    // reported unreadable because the reader was still getting dressed.
     const worker = await this.getWorker();
-    const left = () => this.timeoutMs - (Date.now() - started);
+    const readingFrom = Date.now();
+    const left = () => this.timeoutMs - (Date.now() - Math.max(started, readingFrom));
 
     // A pass that finished and found nothing is a different answer from a pass
     // that never finished. Both produce no zone; only the second means "we ran
