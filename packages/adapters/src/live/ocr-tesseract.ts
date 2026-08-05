@@ -557,10 +557,17 @@ export class TesseractOcrAdapter implements OcrAdapter {
     //
     // So: crop, enlarge, read. If that produces a zone whose check digits
     // validate, nothing else is needed, and the expensive path never runs.
-    const footTop = Math.floor(prepared.height * 0.58);
+    // Cropped tight and *not* enlarged.
+    //
+    // An earlier version of this scaled the strip up to 2400px, which put more
+    // pixels through the engine than reading the whole page would have — the
+    // opposite of the intent. What the reader needs is characters around thirty
+    // pixels wide, and a 44-character zone across 1400px gives exactly that.
+    // Below is roughly a fifth of the work the full page costs.
+    const footTop = Math.floor(prepared.height * 0.68);
     const foot = await sharp(prepared.full)
       .extract({ left: 0, top: footTop, width: prepared.width, height: prepared.height - footTop })
-      .resize({ width: Math.min(2400, Math.round(prepared.width * 1.5)) })
+      .resize({ width: 1400 })
       .sharpen()
       .toBuffer();
 
