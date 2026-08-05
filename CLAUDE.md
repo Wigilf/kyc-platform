@@ -104,10 +104,17 @@ Do not describe this as able to verify a real person's identity. It cannot yet.
 `packages/adapters/src/live/ocr-tesseract.ts`. Things worth knowing before
 changing it:
 
-- **It costs about 220MB resident**, which on a 512MB instance is most of the
-  headroom. It starts on the first document and releases after five idle
-  minutes. Images are processed at 1600px wide because memory, not accuracy, is
-  the binding constraint.
+- **It costs about 220MB resident and is slow on a small instance.** Measured:
+  a document that reads in 0.17s on a laptop takes 18s on the free Render
+  service — the CPU is throttled hard under sustained load. Budgets are
+  therefore configurable (`OCR_TIMEOUT_MS`, 150s in production) and each pass
+  gets a *share* of the budget rather than a fixed number of seconds. Memory
+  peaked at 331MB of 512MB.
+- **The crop at the foot of the page is the fast path.** Recognition cost scales
+  with pixel count and the zone sits in the bottom third, so that strip is read
+  first at 1400px wide. The full-page pass only runs if that fails, and on a
+  slow instance it usually times out — which is fine, because it is the
+  fallback, not the route.
 - **Repairs are gated on the check digits.** OCR misreads the zone constantly,
   so candidate corrections are generated and only ones that make the arithmetic
   work are accepted — and even then the read is marked repaired and its
