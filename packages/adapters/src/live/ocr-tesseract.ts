@@ -536,12 +536,21 @@ export class TesseractOcrAdapter implements OcrAdapter {
 
     /** Reads one image. Returns null on timeout, which is not the same as nothing found. */
     const attemptOn = async (image: Buffer, label: string, budget: number) => {
+      const at = Date.now();
       try {
         const out = await this.withTimeout(worker.recognize(image), label, budget);
         anyPassCompleted = true;
-        return interpret(out.data.text, (out.data.confidence ?? 0) / 100);
+        const read = interpret(out.data.text, (out.data.confidence ?? 0) / 100);
+        this.options.logger?.(
+          `[ocr] ${label}: ${Date.now() - at}ms of ${Math.round(budget)}ms, ` +
+            `${read ? (read.parsed.valid ? 'valid zone' : 'zone did not validate') : 'nothing zone-shaped'}`,
+        );
+        return read;
       } catch (error) {
-        if (error instanceof TimeoutError) return null;
+        if (error instanceof TimeoutError) {
+          this.options.logger?.(`[ocr] ${label}: timed out after ${Math.round(budget)}ms`);
+          return null;
+        }
         throw error;
       }
     };
@@ -571,7 +580,13 @@ export class TesseractOcrAdapter implements OcrAdapter {
       .sharpen()
       .toBuffer();
 
-    const quick = await attemptOn(foot, 'foot-of-page recognition', Math.min(left(), 25_000));
+    // Half the budget, not a fixed number of seconds.
+    //
+    // A fixed cap is wrong in both directions: generous on a laptop where the
+    // pass takes a fifth of a second, and mean on a throttled instance where
+    // the same pass takes a minute — there it cut off the pass most likely to
+    // succeed, and left the slower fallbacks to fail in its place.
+    const quick = await attemptOn(foot, 'foot-of-page', Math.min(left(), this.timeoutMs * 0.5));
     if (quick?.parsed.valid) return quick;
 
     // Otherwise fall back to reading the page and locating the zone properly —
@@ -581,12 +596,14 @@ export class TesseractOcrAdapter implements OcrAdapter {
 
     let wide = null;
     try {
+      const at = Date.now();
       wide = await this.withTimeout(
         worker.recognize(prepared.full, {}, { text: true, blocks: true }),
         'full-page recognition',
         locateBudgetFor(left()),
       );
       anyPassCompleted = true;
+      this.options.logger?.(`[ocr] full-page: ${Date.now() - at}ms`);
     } catch (error) {
       if (!(error instanceof TimeoutError)) throw error;
     }
@@ -604,7 +621,7 @@ export class TesseractOcrAdapter implements OcrAdapter {
           .resize({ width: Math.min(3000, prepared.width * 2) })
           .sharpen()
           .toBuffer();
-        second = await attemptOn(cropped, 'zoomed recognition', left());
+        second = await attemptOn(cropped, 'zoomed', left());
       }
     }
 
