@@ -56,6 +56,27 @@ Cloudflare R2, Backblaze B2, AWS S3 — with server-side encryption, versioning
 off, and a lifecycle rule matching the retention decision in §3.2. The adapter
 already exists; this is configuration plus a bucket.
 
+### 1.2b Reviewers cannot see the documents they are reviewing
+
+Found on 6 August 2026, while answering "is the product done".
+
+There is no endpoint that serves a document image, and no `<img>` anywhere in
+the reviewer console — it lists documents by type and status only. So the
+queue, the case view and the decision buttons all work, and the one thing a
+human reviewer is there to do, look at the passport, is not possible.
+
+This matters more than it sounds. Manual review is the fallback for everything
+the automation declines to decide, which after the changes of 5-6 August is
+most non-trivial cases. A review queue nobody can actually review is a queue
+that will be cleared on vibes.
+
+**What it needs:** an authenticated endpoint returning a short-lived signed URL
+per image — the storage adapter already has `presignGet` — plus an image viewer
+in the case screen with zoom, rotate, and side-by-side against the extracted
+fields. Every access must be audited: looking at someone's passport is itself
+a processing activity. Depends on §1.2, since there is no point serving bytes
+that have been wiped.
+
 ### 1.3 The database expires on 2 September 2026
 
 Free Render Postgres. On expiry the data is gone. There are also no backups, no
