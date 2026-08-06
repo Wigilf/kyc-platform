@@ -163,3 +163,67 @@ describe('submitting a chip read', () => {
     expect(response.statusCode).toBe(404);
   }, 120_000);
 });
+
+describe('when no trust store is configured', () => {
+  it('refuses to answer rather than returning a simulated verdict', async () => {
+    // The simulated chip reader returns passiveAuthPassed for anything, and
+    // this endpoint's whole claim is that its answer cannot be fabricated. It
+    // shipped that way for one deploy: production, with no CSCA_DIR, reported a
+    // payload of nonsense as verified by the issuing state.
+    // A separate tenant, because the adapter set is built once per tenant and
+    // cached — which is right in a deployment, where the environment is fixed
+    // at boot, and means a test cannot change its mind by editing process.env.
+    const previous = process.env.CSCA_DIR;
+    process.env.CSCA_DIR = '';
+
+    const bare = await provisionTenant({
+      slug: `${SLUG}-unconfigured`,
+      name: 'NFC Test Without Trust Anchors',
+      homeCountry: 'GBR',
+      industry: 'FINTECH',
+    });
+    try {
+      const level = await prisma.verificationLevel.findFirstOrThrow({
+        where: { tenantId: bare.id },
+      });
+      const applicant = await prisma.applicant.create({
+        data: {
+          tenantId: bare.id,
+          externalUserId: 'nfc-unconfigured',
+          levelId: level.id,
+          reviewStatus: 'NOT_STARTED',
+          status: 'INIT',
+        },
+      });
+      const token = signToken(
+        {
+          sub: applicant.id,
+          kind: 'applicant',
+          tenantId: bare.id,
+          externalUserId: applicant.externalUserId,
+        },
+        3600,
+      );
+      const sod = await buildSod(signer, DATA_GROUPS);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/applicants/${applicant.id}/nfc`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          dataGroups: { SOD: sod.toString('base64'), DG1: DATA_GROUPS.DG1.toString('base64') },
+          documentNumber: 'UT7431852',
+          dateOfBirth: '900512',
+          dateOfExpiry: '310814',
+        },
+      });
+
+      expect(response.statusCode).toBe(501);
+      expect(response.json().error).toBe('CHIP_VERIFICATION_NOT_CONFIGURED');
+      expect(response.json()).not.toHaveProperty('passiveAuthPassed');
+    } finally {
+      await prisma.tenant.deleteMany({ where: { slug: `${SLUG}-unconfigured` } });
+      process.env.CSCA_DIR = previous;
+    }
+  }, 120_000);
+});

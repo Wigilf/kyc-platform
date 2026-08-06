@@ -626,7 +626,28 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
       throw invalid(`Cannot add a chip read to an applicant in state ${applicant.reviewStatus}.`);
     }
 
-    const result = await adaptersFor(caller.tenantId).nfc.read(
+    const adapters = adaptersFor(caller.tenantId);
+
+    // Never a simulated answer here.
+    //
+    // A simulated document read is a defensible thing to show in a demo: it is
+    // labelled, and everyone understands a photograph is being judged. A
+    // simulated *chip* verification is not, because the entire value of this
+    // check is that it cannot be faked — and the simulation cheerfully returned
+    // passiveAuthPassed for a payload of nonsense, including claiming the clone
+    // check had passed. An endpoint that answers "the issuing state vouches for
+    // this" when no state was consulted is worse than no endpoint.
+    if (adapters.nfc.name !== 'icao-passive-auth') {
+      return reply.code(501).send({
+        error: 'CHIP_VERIFICATION_NOT_CONFIGURED',
+        message:
+          'Chip verification is not enabled on this deployment. It requires CSCA_DIR to ' +
+          'point at trusted country signing certificates; without them nothing can be ' +
+          'verified, and this endpoint will not return a simulated verdict.',
+      });
+    }
+
+    const result = await adapters.nfc.read(
       {
         dataGroups: body.dataGroups,
         documentNumber: body.documentNumber,
