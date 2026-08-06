@@ -7,6 +7,7 @@ import {
   MockContactRiskAdapter,
   MockDeviceAdapter,
 } from './mock/signals.js';
+import { IcaoNfcAdapter } from './live/nfc-icao.js';
 import { TesseractOcrAdapter } from './live/ocr-tesseract.js';
 import { ConsoleNotificationAdapter } from './notifications.js';
 import { LocalStorageAdapter, S3StorageAdapter } from './storage.js';
@@ -20,6 +21,8 @@ export * from './notifications.js';
 export { MockOcrAdapter, MockDocAuthAdapter, MockNfcAdapter } from './mock/documents.js';
 export { TesseractOcrAdapter } from './live/ocr-tesseract.js';
 export type { TesseractOcrOptions } from './live/ocr-tesseract.js';
+export { IcaoNfcAdapter } from './live/nfc-icao.js';
+export type { IcaoNfcOptions } from './live/nfc-icao.js';
 export {
   MockLivenessAdapter,
   MockFaceMatchAdapter,
@@ -59,6 +62,15 @@ export interface AdapterConfig {
   ocrTimeoutMs?: number;
   /** Logs raw recognised text. Debugging only — it is passport contents. */
   ocrDebugText?: boolean;
+  /**
+   * Trusted Country Signing CA certificates, enabling real chip verification.
+   *
+   * With none supplied the simulated reader stays in place: an empty trust
+   * store cannot verify anything, and a chip check that trusts nobody would
+   * either refuse every genuine passport or, worse, be tempted to wave them
+   * through.
+   */
+  trustedCscas?: Array<Buffer | string>;
   storage: {
     driver: 'local' | 's3';
     localDir?: string;
@@ -121,7 +133,10 @@ export function createAdapters(config: AdapterConfig): AdapterRegistry {
     docAuth: new MockDocAuthAdapter(),
     liveness: new MockLivenessAdapter(),
     faceMatch: new MockFaceMatchAdapter(),
-    nfc: new MockNfcAdapter(),
+    nfc:
+      config.trustedCscas && config.trustedCscas.length > 0
+        ? new IcaoNfcAdapter({ trustedCscas: config.trustedCscas, logger: config.logger })
+        : new MockNfcAdapter(),
     screening: new LocalScreeningAdapter(config.watchlistSource),
     registry: new MockRegistryAdapter(),
     device: new MockDeviceAdapter(declared),

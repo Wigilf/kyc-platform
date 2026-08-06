@@ -5,6 +5,7 @@ import {
   CreateSdkTokenSchema,
   DEFAULT_REQUIRED_APPLICANT_FIELDS,
   ListApplicantsQuerySchema,
+  NfcSubmissionSchema,
   PII_BLOB_FIELDS,
   STATUS_COPY,
   UpdateApplicantSchema,
@@ -599,6 +600,92 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
         // looking at boxes they can never tick.
         applicantFacing: APPLICANT_FACING_STEPS.has(s.type),
       })),
+    };
+  });
+
+  /**
+   * Chip data from a mobile app, verified against the issuing state.
+   *
+   * Separate from the document upload because it is a different kind of
+   * evidence entirely. An uploaded photograph is something we form an opinion
+   * about; a chip read is something a government signed. The applicant's phone
+   * does the reading — a browser cannot hold that conversation with a chip —
+   * and the verdict is reached here, because the trust store and the decision
+   * belong on a server the applicant does not control.
+   */
+  app.post<{ Params: { id: string } }>('/v1/applicants/:id/nfc', async (request, reply) => {
+    const caller = requireCaller(request);
+    assertOwnRecord(caller, request.params.id);
+
+    const body = NfcSubmissionSchema.parse(request.body);
+
+    const applicant = await prisma.applicant.findFirstOrThrow({
+      where: { id: request.params.id, tenantId: caller.tenantId },
+    });
+    if (!acceptsSubmissions(applicant.reviewStatus as never)) {
+      throw invalid(`Cannot add a chip read to an applicant in state ${applicant.reviewStatus}.`);
+    }
+
+    const result = await adaptersFor(caller.tenantId).nfc.read(
+      {
+        dataGroups: body.dataGroups,
+        documentNumber: body.documentNumber,
+        dateOfBirth: body.dateOfBirth,
+        dateOfExpiry: body.dateOfExpiry,
+      },
+      { tenantId: caller.tenantId, applicantId: applicant.id, requestId: request.id },
+    );
+
+    if (!result.ok || !result.data) {
+      // The read could not be evaluated. Recorded as our failure rather than
+      // the applicant's, the same way an unreachable provider would be.
+      await prisma.check.create({
+        data: {
+          applicantId: applicant.id,
+          type: 'NFC_CHIP',
+          status: 'FAILED',
+          provider: result.provider,
+          errorCode: result.error?.code,
+          errorMessage: result.error?.message,
+        },
+      });
+      return reply.code(422).send({
+        error: result.error?.code ?? 'NFC_READ_FAILED',
+        message: result.error?.message ?? 'The chip read could not be verified.',
+      });
+    }
+
+    const passed = result.data.passiveAuthPassed;
+    await prisma.check.create({
+      data: {
+        applicantId: applicant.id,
+        type: 'NFC_CHIP',
+        status: 'COMPLETED',
+        result: passed ? 'PASS' : 'FAIL',
+        score: passed ? 100 : 0,
+        rejectLabels: passed ? [] : ['CHIP_AUTHENTICATION_FAILED'],
+        riskContribution: passed ? 0 : 60,
+        provider: result.provider,
+        providerRef: result.providerRef,
+        findings: result.data.findings as never,
+        raw: result.raw as never,
+      },
+    });
+
+    await writeAudit(request, {
+      action: 'applicant.chip_verified',
+      resourceType: 'Applicant',
+      resourceId: applicant.id,
+      after: { passiveAuthPassed: passed, chainValid: result.data.certificateChainValid },
+    });
+
+    return {
+      passiveAuthPassed: passed,
+      certificateChainValid: result.data.certificateChainValid,
+      // Never `false`: passive authentication cannot detect a cloned chip, and
+      // reporting an unanswered question as answered is how a clone gets in.
+      activeAuthPassed: result.data.activeAuthPassed,
+      findings: result.data.findings,
     };
   });
 

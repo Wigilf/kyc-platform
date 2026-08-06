@@ -56,7 +56,7 @@ Break these and something important stops being true, usually silently.
 npm run bootstrap   # containers, migrations, seed data
 npm run dev         # api + worker + reviewer console
 npm run dev:verify  # the public verification page
-npm test            # 80 tests; needs the local database running
+npm test            # 100 tests; needs the local database running
 ```
 
 Sign in to the console with `compliance@acme.test` and the password from
@@ -90,14 +90,37 @@ Sharp edges that have already caught me out:
   `mock` is the default. It reads only the MRZ — the printed fields are not
   transcribed, because nothing would detect a misread.
 - **Simulated:** liveness and face matching. These need a paid vendor.
-- **Absent:** document authenticity. Deciding whether a passport is a forgery
-  needs a licensed library of what every document version from every country
-  looks like. Reading a document is not authenticating one, and a competent
-  forgery carries a perfectly valid MRZ — computing check digits is arithmetic.
+- **Real, when configured:** chip verification for an ePassport. The chip is
+  signed by the issuing state; verifying that signature is *proof* the document
+  is genuine, not an opinion about it. Needs `CSCA_DIR` pointing at trusted
+  country certificates, and a mobile app to do the reading — a browser cannot
+  talk to a chip. Without `CSCA_DIR` the simulated reader stays in place.
+- **Absent:** authenticating a document from a *photograph*. Deciding whether a
+  printed passport is a forgery needs a licensed library of what every document
+  version from every country looks like. Reading a document is not
+  authenticating one, and a competent forgery carries a perfectly valid MRZ —
+  computing check digits is arithmetic. The chip is the way round this.
 - **Absent:** PEP screening (politically exposed persons). No free authoritative
   source exists; the commercial registers are the product.
 
 Do not describe this as able to verify a real person's identity. It cannot yet.
+
+### Chip verification
+
+`packages/core/src/passive-auth.ts`, exposed as `POST /v1/applicants/:id/nfc`.
+
+- **It proves the data, not the medium.** A bit-for-bit clone of a real chip
+  passes passive authentication. Detecting that needs active or chip
+  authentication, which is a conversation with the chip and therefore belongs
+  in the mobile app. `activeAuthPassed` is `null`, never `false` — reporting an
+  unanswered question as answered is how a clone gets in.
+- **Trust anchors are compliance's, not the code's.** CSCA certificates come
+  from the ICAO PKD or a national master list, they rotate, and which states to
+  trust is a decision someone owns. No trust store means no verification, and
+  the code says so loudly rather than passing.
+- **Tests build their own passport PKI** (`packages/core/test/passport-pki.ts`),
+  because only an issuing state can produce a real one — which is the whole
+  point. That shared helper is imported by suites in two packages.
 
 ### The document reader
 

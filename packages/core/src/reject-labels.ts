@@ -105,6 +105,12 @@ export const REJECT_LABELS: Record<string, RejectLabelDef> = Object.fromEntries(
     def('UNDERAGE', 'DOCUMENT_VALIDITY', false, 0,
       'You do not meet the minimum age requirement for this service.',
       'Computed age below the level minimum. Not retryable: it will not change.'),
+    def('CHIP_AUTHENTICATION_FAILED', 'DOCUMENT_VALIDITY', false, 60,
+      GENERIC_FRAUD_MESSAGE,
+      'The chip\'s security object did not verify against the issuing state. Either ' +
+      'the data was altered after issue or no trusted country signed it. Unlike a ' +
+      'failed visual check this is not a matter of opinion, so it is weighted heavily ' +
+      'and is not retryable by re-uploading.'),
     def('MRZ_CHECKSUM_FAILED', 'DOCUMENT_VALIDITY', true, 40,
       'We could not read your document reliably. Please retake the photo.',
       'MRZ check digits do not validate: either bad OCR or a fabricated MRZ.'),

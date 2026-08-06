@@ -15,6 +15,9 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "asn1js": "^3.0.10",
+    "pkijs": "^3.4.0",
+    "pvutils": "^1.2.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

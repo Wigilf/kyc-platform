@@ -10,6 +10,7 @@ export * from './rules.js';
 export * from './rule-library.js';
 export * from './risk.js';
 export * from './mrz.js';
+export * from './passive-auth.js';
 export * from './ubo.js';
 export * from './events.js';
 export * from './travel-rule.js';

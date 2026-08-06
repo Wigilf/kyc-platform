@@ -95,6 +95,27 @@ export const ListApplicantsQuerySchema = z.object({
   order: z.enum(['asc', 'desc']).default('desc'),
 });
 
+/**
+ * A chip read forwarded by a mobile app.
+ *
+ * Base64 rather than binary because it arrives as JSON, and capped because a
+ * data group is kilobytes — a megabyte of "DG2" is somebody probing, not a
+ * portrait. The security object is required: without it there is nothing to
+ * verify the rest against, and accepting a bag of unverifiable data groups
+ * would be indistinguishable from accepting anything the phone chose to send.
+ */
+export const NfcSubmissionSchema = z.object({
+  dataGroups: z
+    .record(z.string().regex(/^[A-Za-z0-9_]{2,10}$/), z.string().base64().max(500_000))
+    .refine((groups) => 'SOD' in groups || 'EF_SOD' in groups, {
+      message: 'A security object (SOD) is required; without it nothing can be verified.',
+    }),
+  documentNumber: z.string().min(1).max(20),
+  /** YYMMDD, as it appears in the machine-readable zone. */
+  dateOfBirth: z.string().regex(/^\d{6}$/),
+  dateOfExpiry: z.string().regex(/^\d{6}$/),
+});
+
 export const UploadDocumentMetaSchema = z.object({
   type: DocumentTypeEnum,
   subType: z.enum(['FRONT_SIDE', 'BACK_SIDE', 'BOTH_SIDES', 'PAGE']).default('FRONT_SIDE'),

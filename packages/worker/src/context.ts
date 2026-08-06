@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   createAdapters,
   type AdapterRegistry,
@@ -118,6 +120,30 @@ export class PrismaDeclaredSubjectSource implements DeclaredSubjectSource {
   }
 }
 
+/**
+ * Country Signing CA certificates for chip verification.
+ *
+ * Read from disk rather than compiled in: the list is maintained by states,
+ * rotates on their schedule, and which countries to trust is a compliance
+ * decision rather than a code one. A missing or empty directory is not an
+ * error — it means chip verification is not configured, and the caller falls
+ * back to the simulated reader rather than trusting nobody in silence.
+ */
+function loadTrustedCscas(): Buffer[] {
+  const dir = process.env.CSCA_DIR;
+  if (!dir) return [];
+  try {
+    return readdirSync(dir)
+      .filter((f) => /\.(pem|cer|crt|der)$/i.test(f))
+      .map((f) => readFileSync(join(dir, f)));
+  } catch (error) {
+    // Loud, because a deployment that meant to verify chips and is not should
+    // not discover it from a verification that quietly came back simulated.
+    console.error(`[nfc] CSCA_DIR=${dir} could not be read: ${String(error)}`);
+    return [];
+  }
+}
+
 /** Adapter set for a tenant. Cached, because construction reads config. */
 const registryCache = new Map<string, AdapterRegistry>();
 
@@ -132,6 +158,9 @@ export function adaptersFor(tenantId: string): AdapterRegistry {
     ocr: (process.env.ADAPTER_OCR ?? 'mock') as 'mock' | 'tesseract',
     ocrTimeoutMs: process.env.OCR_TIMEOUT_MS ? Number(process.env.OCR_TIMEOUT_MS) : undefined,
     ocrDebugText: process.env.OCR_DEBUG_TEXT === 'true',
+    // A directory of PEM certificates from the ICAO PKD or a national master
+    // list. Absent, chip verification stays simulated — see createAdapters.
+    trustedCscas: loadTrustedCscas(),
     storage: {
       driver: (process.env.STORAGE_DRIVER ?? 'local') as 'local' | 's3',
       localDir: process.env.STORAGE_LOCAL_DIR ?? './.data/uploads',
