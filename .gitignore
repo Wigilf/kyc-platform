@@ -11,3 +11,6 @@ packages/db/generated/
 
 # Database dumps contain applicant data — never committed.
 backups/
+
+# Screenshots from a failed browser run.
+.e2e-*.png

@@ -133,6 +133,38 @@ export class PostgresStorageAdapter {
 }
 
 /**
+ * How much the database is carrying in documents.
+ *
+ * Exposed so the schema comment's "revisit before this passes a few GB" is
+ * something the system says out loud rather than a note nobody reads. `/ready`
+ * reports it and warns past the threshold.
+ */
+export async function storedObjectFootprint(): Promise<{
+  objects: number;
+  bytes: number;
+  overThreshold: boolean;
+  thresholdBytes: number;
+}> {
+  const [aggregate] = await prisma.$queryRaw<Array<{ objects: bigint; bytes: bigint | null }>>`
+    select count(*)::bigint as objects, coalesce(sum(size), 0)::bigint as bytes
+    from "StoredObject"
+  `;
+
+  // Two gigabytes. Chosen as the point where the trade stops being obviously
+  // right rather than as a hard limit: backups get slow, the free tier's disk
+  // is finite, and object storage is what this should be by then.
+  const thresholdBytes = Number(process.env.STORAGE_WARN_BYTES ?? 2 * 1024 ** 3);
+  const bytes = Number(aggregate?.bytes ?? 0);
+
+  return {
+    objects: Number(aggregate?.objects ?? 0),
+    bytes,
+    overThreshold: bytes > thresholdBytes,
+    thresholdBytes,
+  };
+}
+
+/**
  * The tenant a key belongs to, for reporting and bulk deletion.
  *
  * Keys are built by `documentStorageKey` as `tenant/<id>/applicant/<id>/...`.

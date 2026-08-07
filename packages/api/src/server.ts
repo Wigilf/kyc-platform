@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import { KycError } from '@kyc/core';
-import { prisma } from '@kyc/db';
+import { prisma, storedObjectFootprint } from '@kyc/db';
 import { signsItsOwnUrls, storageForProcess } from './storage.js';
 import { authPlugin, replyError } from './auth.js';
 import applicantsRoutes from './routes/applicants.js';
@@ -133,7 +133,37 @@ export async function buildServer() {
     // reachable — not merely that the process started.
     try {
       await prisma.$queryRaw`SELECT 1`;
-      return { status: 'ready', database: 'ok' };
+
+      // How much the database is carrying in documents.
+      //
+      // Storing them there is a deliberate compromise with a stated exit, and
+      // a comment in a schema file is not a thing anyone reads at the moment
+      // it starts to matter. Saying it here means the answer is visible from
+      // outside, and a warning appears before backups get slow rather than
+      // after.
+      const storage =
+        (process.env.STORAGE_DRIVER ?? 'postgres') === 'postgres'
+          ? await storedObjectFootprint()
+          : null;
+
+      return {
+        status: 'ready',
+        database: 'ok',
+        storage: storage
+          ? {
+              driver: 'postgres',
+              objects: storage.objects,
+              megabytes: Math.round(storage.bytes / 1024 / 1024),
+              ...(storage.overThreshold
+                ? {
+                    warning:
+                      'Documents in the database have passed the point where object ' +
+                      'storage is the better home. Run `npm run storage:migrate -- --to s3`.',
+                  }
+                : {}),
+            }
+          : { driver: process.env.STORAGE_DRIVER },
+      };
     } catch (error) {
       return reply.status(503).send({
         status: 'not-ready',

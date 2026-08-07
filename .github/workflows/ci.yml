@@ -40,6 +40,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # An object store, so the S3 driver is exercised rather than assumed.
+      # Documents live in Postgres today as a deliberate compromise; the way
+      # out is this driver, and an exit nobody drives is not an exit.
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: kycadmin
+          MINIO_ROOT_PASSWORD: kycadminsecret
+        ports: ['9010:9000']
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
 
     env:
       DATABASE_URL: postgresql://kyc:kyc@localhost:5433/kyc?schema=public
@@ -50,8 +64,11 @@ jobs:
       WEBHOOK_SIGNING_SECRET: ci-webhook-secret
       PII_ENCRYPTION_KEY: '1111111111111111111111111111111111111111111111111111111111111111'
       ADAPTER_MODE: mock
-      STORAGE_DRIVER: local
+      STORAGE_DRIVER: postgres
       STORAGE_LOCAL_DIR: ./.data/uploads
+      TEST_S3_ENDPOINT: http://127.0.0.1:9010
+      TEST_S3_ACCESS_KEY: kycadmin
+      TEST_S3_SECRET_KEY: kycadminsecret
 
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +100,31 @@ jobs:
 
       - name: Test
         run: npx vitest run
+
+      # The browser, against builds shaped like production.
+      #
+      # Two bugs reached production that every check above was blind to: an
+      # endpoint that answered 414 to every request because a storage key is
+      # longer than the router's default parameter cap, and image URLs resolved
+      # against the wrong origin. Neither is visible to a unit test, and local
+      # development hides the second because the dev server proxies the API to
+      # the same origin. This serves the built assets from a separate origin
+      # with no proxy and drives them with a real browser.
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: npm run test:browser
+        env:
+          SEED_PASSWORD: dev-only-local-password
+
+      - name: Keep the failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure
+          path: .e2e-*.png
+          if-no-files-found: ignore
 
       # A migration that only works because the local database already had the
       # tables is not a migration. Prove it applies to an empty one.

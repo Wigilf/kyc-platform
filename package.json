@@ -38,7 +38,9 @@
     "build:verify": "npm run -w @kyc/verify build",
     "dev:verify": "npm run -w @kyc/verify dev",
     "deploy": "dotenv -e .env -- tsx scripts/deploy.mts",
-    "make:specimen": "tsx scripts/make-specimen.mts"
+    "make:specimen": "tsx scripts/make-specimen.mts",
+    "test:browser": "dotenv -e .env -- tsx scripts/e2e-browser.mts",
+    "storage:migrate": "dotenv -e .env -- tsx scripts/storage-migrate.mts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

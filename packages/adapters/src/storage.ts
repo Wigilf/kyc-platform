@@ -167,6 +167,34 @@ export class S3StorageAdapter implements StorageAdapter {
     };
   }
 
+  /**
+   * Creates the bucket if it is not already there.
+   *
+   * Infrastructure usually owns this, and in a managed deployment it should:
+   * a bucket carries retention rules, encryption settings and access policy
+   * that belong in whatever provisions the account. It is here because the
+   * alternative was a second, hand-rolled copy of request signing living in a
+   * test file — and signing code that exists twice is signing code that
+   * disagrees with itself eventually.
+   *
+   * Idempotent: an existing bucket is success, not an error.
+   */
+  async ensureBucket(): Promise<void> {
+    const payloadHash = sha256Hex(Buffer.alloc(0));
+    // Signed and fetched through the same function, so the canonical path the
+    // signature covers is byte-for-byte the path the request uses. Building the
+    // URL separately here differed by one trailing slash, which is enough for
+    // SignatureDoesNotMatch and tells you nothing about why.
+    const headers = this.sign('PUT', '', payloadHash);
+    const response = await fetch(this.urlFor(''), { method: 'PUT', headers });
+
+    // Both mean "it is there now", which is all the caller asked for.
+    if (response.ok || response.status === 409) return;
+    const body = await response.text();
+    if (/BucketAlreadyOwnedByYou|BucketAlreadyExists/.test(body)) return;
+    throw new Error(`Could not create bucket ${this.config.bucket}: ${response.status} ${body}`);
+  }
+
   async put(key: string, bytes: Buffer, contentType: string) {
     const payloadHash = sha256Hex(bytes);
     const headers = this.sign('PUT', key, payloadHash, {

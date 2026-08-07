@@ -63,11 +63,22 @@ Break these and something important stops being true, usually silently.
 ## Running it
 
 ```bash
-npm run bootstrap   # containers, migrations, seed data
-npm run dev         # api + worker + reviewer console
-npm run dev:verify  # the public verification page
-npm test            # 152 tests; needs the local database running
+npm run bootstrap     # containers, migrations, seed data
+npm run dev           # api + worker + reviewer console
+npm run dev:verify    # the public verification page
+npm test              # unit and integration; needs the local database
+npm run test:browser  # a real browser against production-shaped builds
 ```
+
+**`npm test` is not enough on its own.** Two bugs reached production that it
+could not see, because the dev servers proxy `/v1` to the API and make
+everything same-origin while a deployment puts the console, the page and the
+API on three different hosts. `test:browser` builds the production bundles,
+serves them from separate origins with no proxy, and drives them with a real
+browser — it asserts that a page finishes with no failed request and no
+console error, which is what catches a wrong origin, a blocked CORS rule or a
+route that answers 414. Run it before deploying anything that touches a URL,
+an origin, or a route shape.
 
 Sign in to the console with `compliance@acme.test` and the password from
 `SEED_PASSWORD` (locally it defaults to `dev-only-local-password`). The live
@@ -114,6 +125,24 @@ Sharp edges that have already caught me out:
   source exists; the commercial registers are the product.
 
 Do not describe this as able to verify a real person's identity. It cannot yet.
+
+### Where documents live
+
+Postgres, encrypted, by default — `STORAGE_DRIVER=postgres`. Against the
+storage adapter's own advice, which is right at scale and was losing to a disk
+the host wipes on every restart. Three things keep it honest rather than
+merely expedient:
+
+- **The exit is tested.** `packages/adapters/test/s3-storage.test.ts` runs the
+  S3 driver against a real object store, including presigned URLs fetched
+  directly from it. CI has MinIO for this.
+- **The exit is safe to take.** `npm run storage:migrate -- --to s3` copies
+  every object, verifies each against the digest recorded when it was written,
+  reads back what it wrote, and refuses to continue on a mismatch. Deleting the
+  originals is a separate invocation, after the switch is proved in production.
+- **The threshold announces itself.** `/ready` reports how much the database is
+  carrying and warns past 2GB, so "revisit before a few GB" is something the
+  system says rather than a comment nobody reads.
 
 ### Chip verification
 
