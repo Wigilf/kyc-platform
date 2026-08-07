@@ -182,6 +182,13 @@ export interface ScreeningHit {
   };
 }
 
+export interface DocumentImageRef {
+  id: string;
+  storageKey: string;
+  side: string;
+  contentType: string;
+}
+
 export interface ApplicantDetail extends ApplicantRow {
   documents: Array<{
     id: string;
@@ -192,6 +199,9 @@ export interface ApplicantDetail extends ApplicantRow {
     expiryDate: string | null;
     rejectLabels: string[];
     createdAt: string;
+    images: DocumentImageRef[];
+    /** Whatever the reader extracted. Shape varies by document type. */
+    extracted: Record<string, unknown> | null;
   }>;
   checks: Check[];
   reviews: Array<{

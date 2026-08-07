@@ -205,6 +205,16 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
             expiryDate: true,
             rejectLabels: true,
             createdAt: true,
+            // What the reader extracted, so a reviewer can compare the document
+            // against what the applicant declared without leaving the case.
+            extracted: true,
+            // Storage keys, so the console can presign and display the images.
+            // Operational view only — `applicantView` builds the applicant's
+            // response separately and never sees this.
+            images: {
+              select: { id: true, storageKey: true, side: true, contentType: true },
+              orderBy: { createdAt: 'asc' },
+            },
           },
         },
         checks: {
@@ -373,30 +383,59 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
       if (files.length === 0) throw invalid('At least one file is required');
       const parsed = UploadDocumentMetaSchema.parse(meta);
 
-      // A replacement replaces. Without this the previous attempt stays current,
-      // and the checks attached to it keep counting against the applicant — so
-      // someone who fixes a blurry passport is still judged on the blurry one.
-      await prisma.document.updateMany({
+      // One row per physical document; the sides are images on it.
+      //
+      // This used to create a document per upload, keyed by type *and* side, so
+      // a passport arrived as two unrelated documents. The pipeline picks one
+      // document per step with `.find()`, so it examined whichever side came
+      // back first and left the other sitting at UPLOADED forever — on a real
+      // passport that is a coin toss between reading the data page and reading
+      // a blank back cover and calling the document unreadable.
+      const existing = await prisma.document.findFirst({
         where: {
           applicantId: applicant.id,
           type: parsed.type as never,
-          subType: parsed.subType as never,
-          status: { not: 'SUPERSEDED' },
+          status: { notIn: ['SUPERSEDED', 'REJECTED'] },
         },
-        data: { status: 'SUPERSEDED' },
+        orderBy: { createdAt: 'desc' },
       });
 
-      const document = await prisma.document.create({
-        data: {
-          applicantId: applicant.id,
-          type: parsed.type as never,
-          subType: parsed.subType as never,
-          country: parsed.country ?? applicant.country,
-          number: parsed.number ?? null,
-          issuedDate: parsed.issuedDate ? new Date(parsed.issuedDate) : null,
-          expiryDate: parsed.expiryDate ? new Date(parsed.expiryDate) : null,
-          status: 'UPLOADED',
-        },
+      const document = existing
+        ? await prisma.document.update({
+            where: { id: existing.id },
+            data: {
+              // Back to unexamined: a document with a new side is a new document
+              // as far as the checks are concerned, and leaving it EXTRACTED
+              // would let the old verdict stand over the new evidence.
+              status: 'UPLOADED',
+              rejectLabels: [],
+              country: parsed.country ?? existing.country,
+              number: parsed.number ?? existing.number,
+              ...(parsed.issuedDate ? { issuedDate: new Date(parsed.issuedDate) } : {}),
+              ...(parsed.expiryDate ? { expiryDate: new Date(parsed.expiryDate) } : {}),
+            },
+          })
+        : await prisma.document.create({
+            data: {
+              applicantId: applicant.id,
+              type: parsed.type as never,
+              subType: parsed.subType as never,
+              country: parsed.country ?? applicant.country,
+              number: parsed.number ?? null,
+              issuedDate: parsed.issuedDate ? new Date(parsed.issuedDate) : null,
+              expiryDate: parsed.expiryDate ? new Date(parsed.expiryDate) : null,
+              status: 'UPLOADED',
+            },
+          });
+
+      // Re-uploading one side replaces that side and leaves the others alone.
+      // Superseding the whole document here would silently discard the back of
+      // a card because the front was retaken.
+      const replacedSides = new Set(
+        files.map((_, index) => (index === 0 ? parsed.subType : 'BACK_SIDE')),
+      );
+      await prisma.documentImage.deleteMany({
+        where: { documentId: document.id, side: { in: [...replacedSides] as never[] } },
       });
 
       const storage = adaptersFor(caller.tenantId).storage;
@@ -498,13 +537,21 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
 
     const applicant = await prisma.applicant.findFirstOrThrow({
       where: { id: request.params.id, tenantId: caller.tenantId },
-      include: { level: true, documents: true },
+      include: { level: true, documents: { include: { images: { select: { side: true } } } } },
     });
 
     const steps = parseLevelSteps(applicant.level.steps);
-    const usable = new Set(
-      applicant.documents
-        .filter((d) => d.status !== 'REJECTED' && d.status !== 'SUPERSEDED')
+    const live = applicant.documents.filter(
+      (d) => d.status !== 'REJECTED' && d.status !== 'SUPERSEDED',
+    );
+    const usable = new Set(live.map((d) => d.type as string));
+    /** Types for which both sides are actually present, not just one. */
+    const bothSides = new Set(
+      live
+        .filter((d) => {
+          const sides = new Set(d.images.map((i) => i.side as string));
+          return sides.has('FRONT_SIDE') && sides.has('BACK_SIDE');
+        })
         .map((d) => d.type as string),
     );
 
@@ -545,7 +592,13 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
       }
       const accepted = documentTypesForStep(s);
       // A step no document can satisfy is not satisfied by having none.
-      return accepted.length > 0 && accepted.some((t) => usable.has(t));
+      if (accepted.length === 0) return false;
+      // A level that asks for both sides is not satisfied by one. It used to be:
+      // satisfaction was computed from document type alone, so an ID card was
+      // complete the moment its front arrived, and only the widget's own
+      // bookkeeping kept asking for the back.
+      const needed = s.config.requireBothSides ? bothSides : usable;
+      return accepted.some((t) => needed.has(t));
     };
 
     const completed = new Set(steps.filter(isSatisfied).map((s) => s.id));

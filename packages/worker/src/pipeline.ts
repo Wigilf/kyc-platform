@@ -394,6 +394,14 @@ async function runDocumentStep(
         documentNumber: number,
         mrzPresent: Boolean(extracted.mrz),
         fieldConfidence: extracted.fieldConfidence,
+        // Which reader produced this, stored alongside the values themselves.
+        //
+        // A simulated reader invents fields that agree with what the applicant
+        // declared rather than with the photograph, so a reviewer looking at
+        // both sees plausible text beside an image it does not match. Without
+        // this they cannot tell that from a genuine discrepancy — which is the
+        // one thing they are there to spot.
+        readBy: ocr.provider,
       } as never,
       rejectLabels: ocrLabels,
     },

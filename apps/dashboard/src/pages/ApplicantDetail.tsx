@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { ApplicantDetail as Detail, Check } from '../api';
+import { DocumentViewer } from '../components/DocumentViewer';
 import { api } from '../api';
 import { Badge, ErrorNote, Labels, relativeTime, riskTone, tone, useApi } from '../components';
 
@@ -86,6 +87,7 @@ export default function ApplicantDetail() {
                       <th>Status</th>
                       <th>Country</th>
                       <th>Expires</th>
+                      <th>Image</th>
                       <th>Labels</th>
                     </tr>
                   </thead>
@@ -102,6 +104,13 @@ export default function ApplicantDetail() {
                         <td className="mono">{d.country ?? '—'}</td>
                         <td className="muted">
                           {d.expiryDate ? d.expiryDate.slice(0, 10) : '—'}
+                        </td>
+                        <td>
+                          <DocumentViewer
+                            images={d.images ?? []}
+                            extracted={d.extracted}
+                            title={d.type.replace(/_/g, ' ')}
+                          />
                         </td>
                         <td>
                           <Labels items={d.rejectLabels} />

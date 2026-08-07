@@ -84,6 +84,84 @@ describe('every step, not only the outstanding ones', () => {
   });
 });
 
+describe('a document with two sides', () => {
+  /** Uploads one side of a document through the real multipart endpoint. */
+  async function uploadSide(side: 'FRONT_SIDE' | 'BACK_SIDE') {
+    const boundary = '----kyctest';
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\nID_CARD\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="subType"\r\n\r\n${side}\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="s.png"\r\n` +
+          `Content-Type: image/png\r\n\r\n`,
+      ),
+      png,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    return app.inject({
+      method: 'POST',
+      url: `/v1/applicants/${applicantId}/documents`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+      },
+      payload: body,
+    });
+  }
+
+  it('is one document carrying both sides, not two documents', async () => {
+    expect((await uploadSide('FRONT_SIDE')).statusCode).toBeLessThan(300);
+    expect((await uploadSide('BACK_SIDE')).statusCode).toBeLessThan(300);
+
+    const documents = await prisma.document.findMany({
+      where: { applicantId, type: 'ID_CARD', status: { not: 'SUPERSEDED' } },
+      include: { images: true },
+    });
+
+    // Two rows here means the pipeline picks one with `.find()` and never looks
+    // at the other — on a real card, a coin toss between reading the data side
+    // and declaring a blank back unreadable.
+    expect(documents).toHaveLength(1);
+    expect(documents[0]!.images.map((i) => i.side).sort()).toEqual(['BACK_SIDE', 'FRONT_SIDE']);
+  }, 60_000);
+
+  it('replaces only the side that was re-uploaded', async () => {
+    const before = await prisma.documentImage.findFirstOrThrow({
+      where: { document: { applicantId, type: 'ID_CARD' }, side: 'BACK_SIDE' },
+    });
+
+    await uploadSide('FRONT_SIDE');
+
+    const after = await prisma.documentImage.findMany({
+      where: { document: { applicantId, type: 'ID_CARD' } },
+    });
+    // The back must survive the front being retaken.
+    expect(after.map((i) => i.side).sort()).toEqual(['BACK_SIDE', 'FRONT_SIDE']);
+    expect(after.find((i) => i.side === 'BACK_SIDE')!.id).toBe(before.id);
+  }, 60_000);
+
+  it('sends the document back to be re-examined when a side changes', async () => {
+    await prisma.document.updateMany({
+      where: { applicantId, type: 'ID_CARD' },
+      data: { status: 'EXTRACTED', rejectLabels: ['BLURRY_IMAGE'] },
+    });
+
+    await uploadSide('FRONT_SIDE');
+
+    const document = await prisma.document.findFirstOrThrow({
+      where: { applicantId, type: 'ID_CARD', status: { not: 'SUPERSEDED' } },
+    });
+    // Leaving the old verdict attached would judge the new photo on the old one.
+    expect(document.status).toBe('UPLOADED');
+    expect(document.rejectLabels).toEqual([]);
+  }, 60_000);
+});
+
 describe('what the applicant already supplied', () => {
   it('is empty before anything is supplied', async () => {
     const body = await requirements();

@@ -69,6 +69,33 @@ export function decryptPii(serialized: string, keyHex: string): string {
   ]).toString('utf8');
 }
 
+/**
+ * The same envelope, over arbitrary bytes.
+ *
+ * Separate from `encryptPii` because base64-ing a passport photograph into a
+ * JSON string to encrypt it, then base64-ing the ciphertext again, inflates it
+ * by roughly four thirds twice over for no benefit. This keeps the same
+ * algorithm, key and authentication tag, and returns bytes.
+ *
+ * Layout: version (1 byte) ‖ iv (12) ‖ tag (16) ‖ ciphertext. Self-describing,
+ * so a stored object can be decrypted without a sidecar record telling you how.
+ */
+export function encryptBytes(plaintext: Buffer, keyHex: string, version = 1): Buffer {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(ALGO, keyFromHex(keyHex), iv);
+  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Buffer.concat([Buffer.from([version]), iv, cipher.getAuthTag(), ct]);
+}
+
+export function decryptBytes(sealed: Buffer, keyHex: string): Buffer {
+  if (sealed.length < 29) throw new Error('Sealed object is too short to be valid');
+  const version = sealed[0];
+  if (version !== 1) throw new Error(`Unsupported sealed object version: ${version}`);
+  const decipher = createDecipheriv(ALGO, keyFromHex(keyHex), sealed.subarray(1, 13));
+  decipher.setAuthTag(sealed.subarray(13, 29));
+  return Buffer.concat([decipher.update(sealed.subarray(29)), decipher.final()]);
+}
+
 export function encryptJson(
   value: unknown,
   keyHex: string,

@@ -72,9 +72,17 @@ export interface AdapterConfig {
    */
   trustedCscas?: Array<Buffer | string>;
   storage: {
-    driver: 'local' | 's3';
+    driver: 'local' | 's3' | 'postgres';
     localDir?: string;
     signingSecret: string;
+    /**
+     * Pre-built Postgres driver, supplied by the caller.
+     *
+     * Injected rather than constructed here for the same reason as the
+     * watchlist source: @kyc/adapters stays free of a database dependency, so
+     * it can be used by anything that speaks the interface.
+     */
+    postgres?: StorageAdapter;
     s3?: {
       endpoint: string;
       region: string;
@@ -151,6 +159,17 @@ export function createStorage(config: AdapterConfig['storage']): StorageAdapter 
   if (config.driver === 's3') {
     if (!config.s3) throw new Error('STORAGE_DRIVER=s3 requires S3 configuration');
     return new S3StorageAdapter(config.s3);
+  }
+  if (config.driver === 'postgres') {
+    // Constructed by the caller, because this package deliberately has no
+    // database dependency and the Postgres driver needs one.
+    if (!config.postgres) {
+      throw new Error(
+        'STORAGE_DRIVER=postgres requires the caller to supply the adapter; see ' +
+          'adaptersFor() in @kyc/worker.',
+      );
+    }
+    return config.postgres;
   }
   return new LocalStorageAdapter(
     config.localDir ?? './.data/uploads',

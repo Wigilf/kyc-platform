@@ -188,6 +188,9 @@ async function authenticateBearer(request: FastifyRequest): Promise<Caller | nul
   };
 }
 
+/** `GET /v1/files/<key>` and nothing else beneath `/v1/files/`. */
+const FILE_DOWNLOAD = /^\/v1\/files\/(?!presign$)[^/]+$/;
+
 export const authPlugin: FastifyPluginAsync = fp(async (app) => {
   app.decorateRequest('caller', undefined);
 
@@ -202,7 +205,18 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
       path === '/v1/auth/login' ||
       // Public only when DEMO_MODE is on. Enumerated here rather than matched by
       // prefix so a future /v1/demo/* route cannot become public by accident.
-      (path === '/v1/demo/sessions' && process.env.DEMO_MODE === 'true')
+      (path === '/v1/demo/sessions' && process.env.DEMO_MODE === 'true') ||
+      // A signed document link carries its own authorisation in the signature —
+      // a short-lived HMAC over the key and expiry, minted by an authenticated
+      // reviewer. Demanding a bearer token as well would defeat the point: the
+      // link exists so an <img> tag can load it, and an image request carries
+      // no headers. The route itself serves nothing without a valid signature.
+      //
+      // Matched precisely, not by prefix. A prefix match here also exempts
+      // `/v1/files/presign`, which is the endpoint that *mints* the links — so
+      // the one route that must be authenticated would have become the one
+      // route that was not.
+      (request.method === 'GET' && FILE_DOWNLOAD.test(path))
     ) {
       return;
     }

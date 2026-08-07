@@ -64,6 +64,8 @@ export {
   type AuditEntryInput,
 } from './audit.js';
 
+export { PostgresStorageAdapter } from './storage.js';
+
 export {
   provisionTenant,
   provisionLevels,

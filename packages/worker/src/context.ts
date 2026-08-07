@@ -9,7 +9,7 @@ import {
   type WatchlistSource,
 } from '@kyc/adapters';
 import { nameTokens } from '@kyc/core';
-import { prisma } from '@kyc/db';
+import { PostgresStorageAdapter, prisma } from '@kyc/db';
 
 /**
  * Shared runtime wiring.
@@ -162,7 +162,21 @@ export function adaptersFor(tenantId: string): AdapterRegistry {
     // list. Absent, chip verification stays simulated — see createAdapters.
     trustedCscas: loadTrustedCscas(),
     storage: {
-      driver: (process.env.STORAGE_DRIVER ?? 'local') as 'local' | 's3',
+      // Postgres by default.
+      //
+      // The old default was the local filesystem, which on a container host is
+      // a directory the platform deletes on every restart — so uploaded
+      // documents were being thrown away and nobody noticed until a reviewer
+      // went looking for one. Anything durable is better; see the StoredObject
+      // model for when to move to S3.
+      driver: (process.env.STORAGE_DRIVER ?? 'postgres') as 'local' | 's3' | 'postgres',
+      postgres:
+        (process.env.STORAGE_DRIVER ?? 'postgres') === 'postgres'
+          ? new PostgresStorageAdapter(
+              process.env.APP_SECRET ?? 'dev-secret',
+              process.env.PII_ENCRYPTION_KEY ?? '',
+            )
+          : undefined,
       localDir: process.env.STORAGE_LOCAL_DIR ?? './.data/uploads',
       signingSecret: process.env.APP_SECRET ?? 'dev-secret',
       ...(process.env.STORAGE_DRIVER === 's3'

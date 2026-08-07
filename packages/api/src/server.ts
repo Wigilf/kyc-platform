@@ -5,7 +5,7 @@ import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import { KycError } from '@kyc/core';
 import { prisma } from '@kyc/db';
-import { LocalStorageAdapter, createStorage } from '@kyc/adapters';
+import { signsItsOwnUrls, storageForProcess } from './storage.js';
 import { authPlugin, replyError } from './auth.js';
 import applicantsRoutes from './routes/applicants.js';
 import decisionRoutes from './routes/decisions.js';
@@ -25,6 +25,12 @@ import transactionRoutes from './routes/transactions.js';
 
 export async function buildServer() {
   const app = Fastify({
+    // Document storage keys are path parameters and run to roughly 130
+    // characters once URL-encoded — tenant id, applicant id, document id and a
+    // filename. Fastify's default cap is 100, so every request for a document
+    // image was answered with 414 before reaching the route. The image endpoint
+    // had therefore never worked, which is why nothing in the console used it.
+    maxParamLength: 512,
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
       redact: {
@@ -140,29 +146,30 @@ export async function buildServer() {
   app.get<{ Params: { key: string }; Querystring: { expires?: string; signature?: string } }>(
     '/v1/files/:key',
     async (request, reply) => {
-      const storage = createStorage({
-        driver: (process.env.STORAGE_DRIVER ?? 'local') as 'local' | 's3',
-        localDir: process.env.STORAGE_LOCAL_DIR ?? './.data/uploads',
-        signingSecret: process.env.APP_SECRET ?? 'dev-secret',
-      });
-
+      const storage = storageForProcess();
       const key = decodeURIComponent(request.params.key);
 
-      // Document images are the most sensitive objects in the system, so access is
-      // by time-limited signature only — never by knowing the key.
-      if (storage instanceof LocalStorageAdapter) {
-        const valid = storage.verifyPresigned(
-          key,
-          Number(request.query.expires),
-          request.query.signature ?? '',
-        );
-        if (!valid) {
-          return reply
-            .status(403)
-            .send({ error: { code: 'FORBIDDEN', message: 'Invalid or expired file signature' } });
-        }
-      } else if (!request.caller) {
-        return reply.status(401).send({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
+      // Document images are the most sensitive objects in the system, so access
+      // is by time-limited signature only — never by knowing the key, and never
+      // merely by being logged in.
+      //
+      // This used to demand a signature from the local driver and fall back to
+      // "is there any caller at all" for every other one. Under that rule an
+      // applicant's own short-lived token — issued to let them upload their own
+      // passport — would fetch any object in any tenant, given its key. The
+      // driver a deployment happens to use is not an access control decision.
+      if (!signsItsOwnUrls(storage)) {
+        // A driver that presigns elsewhere should never see a request here; if
+        // one does, something is generating links this route cannot vouch for.
+        return reply.status(404).send({
+          error: { code: 'NOT_FOUND', message: 'File not found' },
+        });
+      }
+
+      if (!storage.verifyPresigned(key, Number(request.query.expires), request.query.signature ?? '')) {
+        return reply
+          .status(403)
+          .send({ error: { code: 'FORBIDDEN', message: 'Invalid or expired file signature' } });
       }
 
       try {
@@ -191,11 +198,7 @@ export async function buildServer() {
         throw new KycError('FORBIDDEN', 'Storage key does not belong to this tenant');
       }
 
-      const storage = createStorage({
-        driver: (process.env.STORAGE_DRIVER ?? 'local') as 'local' | 's3',
-        localDir: process.env.STORAGE_LOCAL_DIR ?? './.data/uploads',
-        signingSecret: process.env.APP_SECRET ?? 'dev-secret',
-      });
+      const storage = storageForProcess();
 
       await writeAudit(request, {
         action: 'document.image.presigned',
