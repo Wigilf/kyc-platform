@@ -26,6 +26,18 @@ function normaliseBase(raw: string | undefined): string {
 
 const API_BASE = normaliseBase(import.meta.env.VITE_API_BASE_URL);
 
+/**
+ * Where the API lives, for anything that needs to build a URL by hand.
+ *
+ * Exported so nobody re-derives it. The document viewer did, from a variable
+ * named slightly differently, and resolved image links against the dashboard's
+ * own origin instead — which works locally, where the dev server proxies, and
+ * 404s everywhere else.
+ */
+export function apiOrigin(): string {
+  return API_BASE || window.location.origin;
+}
+
 export interface Session {
   token: string;
   user: { id: string; name: string | null; email: string; role: string };

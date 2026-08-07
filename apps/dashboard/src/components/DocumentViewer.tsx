@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../api';
+import { api, apiOrigin } from '../api';
 
 /**
  * Looking at the document.
@@ -118,9 +118,9 @@ function SignedImage({
           ttlSeconds: TTL_SECONDS,
         });
         if (cancelled) return;
-        // The API returns a path; resolve it against the API origin rather than
-        // the dashboard's, which is a different host in every deployment.
-        setUrl(new URL(res.url, import.meta.env.VITE_API_URL ?? window.location.origin).toString());
+        // The API returns a path; resolve it against the API's origin, which is
+        // a different host from the dashboard in every real deployment.
+        setUrl(new URL(res.url, apiOrigin()).toString());
         setError(null);
         timer = setTimeout(load, REFRESH_AFTER_MS);
       } catch (e) {
