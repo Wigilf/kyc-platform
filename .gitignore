@@ -14,3 +14,4 @@ backups/
 
 # Screenshots from a failed browser run.
 .e2e-*.png
+.deploy.lock

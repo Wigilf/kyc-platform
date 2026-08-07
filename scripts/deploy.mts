@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import { execSync } from 'node:child_process';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * Deploy, and refuse to claim success without evidence.
@@ -140,10 +142,65 @@ async function assertServedBundleFresh(base: string): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * One deploy at a time.
+ *
+ * The test suite drives a real database, and two runs against it fight over
+ * the same fixture rows and the audit log's advisory locks — so a second
+ * deploy started while the first is still running does not queue politely, it
+ * makes both fail with errors that look like real regressions. That happened
+ * three times before this existed, and each time cost a diagnosis of a bug
+ * that was not there.
+ *
+ * A stale lock from a killed run is detected by checking whether the process
+ * still exists, rather than by an age heuristic that is wrong in both
+ * directions.
+ */
+const LOCK = join(process.cwd(), '.deploy.lock');
+
+function claimLock() {
+  if (existsSync(LOCK)) {
+    const holder = Number(readFileSync(LOCK, 'utf8').trim());
+    if (Number.isFinite(holder) && holder > 0 && alive(holder)) {
+      fail(
+        `another deploy is already running (pid ${holder}). Wait for it, or kill it and ` +
+          `remove ${LOCK}.`,
+      );
+    }
+    console.log(`  (clearing a lock left by pid ${holder}, which is no longer running)`);
+  }
+  writeFileSync(LOCK, String(process.pid));
+  for (const signal of ['exit', 'SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, releaseLock);
+  }
+}
+
+function releaseLock() {
+  try {
+    if (existsSync(LOCK) && readFileSync(LOCK, 'utf8').trim() === String(process.pid)) {
+      rmSync(LOCK);
+    }
+  } catch {
+    // Nothing useful to do while exiting.
+  }
+}
+
+function alive(pid: number): boolean {
+  try {
+    // Signal 0 checks for existence without touching the process.
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const args = process.argv.slice(2);
 const selected = SERVICES.filter((s) => args.includes(`--${s.flag}`));
 const targets = selected.length ? selected : SERVICES;
 const runTests = !args.includes('--no-test');
+
+claimLock();
 
 step('Checking the working tree');
 const dirty = sh('git status --porcelain');
