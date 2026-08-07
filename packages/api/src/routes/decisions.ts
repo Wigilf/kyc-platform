@@ -5,6 +5,7 @@ import {
   SubmitDecisionSchema,
   clientMessagesFor,
   conflict,
+  notFound,
   isFinalRejection,
   transition,
 } from '@kyc/core';
@@ -21,6 +22,25 @@ import { requireBackend, requireRole, tenantOf, writeAudit } from '../auth.js';
  * AGENT rank, a sanctions true-positive confirmation requires an MLRO, and every
  * one of them writes to the audit chain.
  */
+
+/**
+ * A case carries its own tenant, so scoping is a direct check.
+ *
+ * Three routes wrote to a case by id alone — assign, note, and file a SAR —
+ * so any agent anywhere could touch any case in any tenant. The SAR one was
+ * the worst of them: it stamps a suspicious activity report onto somebody
+ * else's regulatory record and closes their case.
+ *
+ * Reported as not-found rather than forbidden, because confirming that a case
+ * id exists somewhere is itself a disclosure.
+ */
+async function assertCaseInTenant(caseId: string, tenantId: string): Promise<void> {
+  const found = await prisma.case.findFirst({
+    where: { id: caseId, tenantId },
+    select: { id: true },
+  });
+  if (!found) throw notFound('Case', caseId);
+}
 
 const decisionRoutes: FastifyPluginAsync = async (app) => {
   // --- Review queue ---
@@ -120,7 +140,18 @@ const decisionRoutes: FastifyPluginAsync = async (app) => {
     '/v1/cases/:id/assign',
     async (request) => {
       const user = requireRole(request, 'AGENT');
+      await assertCaseInTenant(request.params.id, user.tenantId);
+
       const assigneeId = request.body?.userId ?? user.userId;
+      // An assignee from another tenant would put a case in a queue its owner
+      // cannot see, and hand a stranger's name to whoever reads the audit log.
+      if (assigneeId !== user.userId) {
+        const assignee = await prisma.user.findFirst({
+          where: { id: assigneeId, tenantId: user.tenantId, isActive: true },
+          select: { id: true },
+        });
+        if (!assignee) throw notFound('User', assigneeId);
+      }
 
       const record = await prisma.case.update({
         where: { id: request.params.id },
@@ -147,6 +178,8 @@ const decisionRoutes: FastifyPluginAsync = async (app) => {
     '/v1/cases/:id/notes',
     async (request, reply) => {
       const user = requireRole(request, 'AGENT');
+      await assertCaseInTenant(request.params.id, user.tenantId);
+
       const note = await prisma.caseNote.create({
         data: {
           caseId: request.params.id,
@@ -397,6 +430,7 @@ const decisionRoutes: FastifyPluginAsync = async (app) => {
     '/v1/cases/:id/sar',
     async (request) => {
       const user = requireRole(request, 'MLRO');
+      await assertCaseInTenant(request.params.id, user.tenantId);
 
       const record = await prisma.case.update({
         where: { id: request.params.id },

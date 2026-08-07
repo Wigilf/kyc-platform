@@ -34,6 +34,16 @@ There are three things a user can touch:
 
 ## Things that are load-bearing
 
+- **Every write must be scoped to the caller's tenant.** Three case routes —
+  assign, note, file a SAR — updated by id alone, so any agent could act on any
+  tenant's case. `packages/api/test/tenant-isolation.test.ts` guards it. A
+  handler that looks a record up by id and does not name a tenant is a bug.
+- **Document access comes from a signature, never from being logged in.** The
+  check must not depend on which storage driver is configured.
+- **Only a session token authenticates.** The bearer path once treated any
+  non-applicant token as a user token, which made the two-factor challenge —
+  whose whole purpose is to be useless on its own — a working session.
+
 Break these and something important stops being true, usually silently.
 
 - **Only the latest check per document counts.** Reading an applicant's whole
@@ -56,7 +66,7 @@ Break these and something important stops being true, usually silently.
 npm run bootstrap   # containers, migrations, seed data
 npm run dev         # api + worker + reviewer console
 npm run dev:verify  # the public verification page
-npm test            # 100 tests; needs the local database running
+npm test            # 152 tests; needs the local database running
 ```
 
 Sign in to the console with `compliance@acme.test` and the password from

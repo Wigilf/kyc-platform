@@ -290,3 +290,54 @@ describe('turning it off', () => {
     await prisma.tenant.update({ where: { id: tenantId }, data: { requireTwoFactor: false } });
   }, 60_000);
 });
+
+describe('guessing the password', () => {
+  it('locks the account rather than answering indefinitely', async () => {
+    const email = 'lockout@2fa-test.test';
+    await prisma.user.create({
+      data: {
+        tenantId,
+        email,
+        name: 'Lockout Subject',
+        role: 'AGENT',
+        passwordHash: hashPassword(PASSWORD),
+      },
+    });
+
+    for (let i = 0; i < 8; i++) {
+      const response = await login('not-the-password', email);
+      // Every failure looks the same from outside; only the database knows.
+      expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    }
+
+    const user = await prisma.user.findFirstOrThrow({ where: { tenantId, email } });
+    expect(user.lockedUntil).not.toBeNull();
+    expect(user.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+
+    // And the correct password is refused while the lock stands, or the lock
+    // would only be slowing down someone who was going to fail anyway.
+    const correct = await login(PASSWORD, email);
+    expect(correct.statusCode).toBeGreaterThanOrEqual(400);
+    // Refused identically, so the response does not confirm the address exists.
+    expect(correct.json().error?.message ?? correct.json().message).toContain('Invalid credentials');
+  }, 60_000);
+
+  it('forgets the failures once someone signs in successfully', async () => {
+    const email = 'recovers@2fa-test.test';
+    await prisma.user.create({
+      data: {
+        tenantId,
+        email,
+        name: 'Recovers',
+        role: 'AGENT',
+        passwordHash: hashPassword(PASSWORD),
+        failedLoginAttempts: 3,
+      },
+    });
+
+    expect((await login(PASSWORD, email)).statusCode).toBe(200);
+
+    const user = await prisma.user.findFirstOrThrow({ where: { tenantId, email } });
+    expect(user.failedLoginAttempts).toBe(0);
+  }, 60_000);
+});

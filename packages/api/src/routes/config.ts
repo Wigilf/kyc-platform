@@ -23,10 +23,28 @@ import { requireBackend, requireRole, signToken, writeAudit } from '../auth.js';
  * rather than mutating the one that past decisions were made under.
  */
 
+/** Wrong passwords tolerated for one account before it stops answering. */
+const MAX_LOGIN_FAILURES = 8;
+const LOGIN_LOCKOUT_MINUTES = 15;
+
 const configRoutes: FastifyPluginAsync = async (app) => {
   // --- Login (dev-grade; a real deployment puts SSO in front) ---
   app.post<{ Body: { email: string; password: string } }>(
     '/v1/auth/login',
+    {
+      // A backstop, not the protection.
+      //
+      // Tighter than the global budget, which is sized for ordinary API
+      // traffic and would allow three hundred password guesses a minute from
+      // one address. Not tighter still, because this is keyed by address and a
+      // whole office arriving at nine o'clock shares one — squeezing it locks
+      // out the people who know their password. The limit that actually bites
+      // an attacker follows the *account*: eight wrong passwords and it stops
+      // answering, however many addresses they come from.
+      config: {
+        rateLimit: { max: 60, timeWindow: '1 minute' },
+      },
+    },
     async (request) => {
       const { email, password } = request.body ?? {};
       if (!email || !password) throw invalid('email and password are required');
@@ -39,11 +57,39 @@ const configRoutes: FastifyPluginAsync = async (app) => {
       });
 
       const { hashPassword, verifyPassword } = await import('@kyc/core');
+
+      // A locked account fails the same way a wrong password does.
+      //
+      // Saying "this account is locked" would confirm the address exists, and
+      // the uniform failure below exists precisely so it does not. Someone
+      // genuinely locked out learns nothing here and everything from the email
+      // an operator sends them, which is the right channel for it.
+      const locked = Boolean(user?.lockedUntil && user.lockedUntil > new Date());
+
       // Uniform failure: distinguishing "no such user" from "wrong password" is a
       // user-enumeration oracle.
       const check = verifyPassword(password, user?.passwordHash ?? null);
-      if (!user || !check.ok) {
+      if (!user || !check.ok || locked) {
+        if (user && !locked) {
+          const failures = user.failedLoginAttempts + 1;
+          await prisma.user.update({
+            where: { id: user.id },
+            data: {
+              failedLoginAttempts: failures,
+              ...(failures >= MAX_LOGIN_FAILURES
+                ? { lockedUntil: new Date(Date.now() + LOGIN_LOCKOUT_MINUTES * 60_000) }
+                : {}),
+            },
+          });
+        }
         throw invalid('Invalid credentials');
+      }
+
+      if (user.failedLoginAttempts > 0 || user.lockedUntil) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { failedLoginAttempts: 0, lockedUntil: null },
+        });
       }
 
       // Accounts created under the old unsalted scheme are upgraded the first

@@ -45,7 +45,16 @@ with a monthly minimum.
 contract, is the operator's call. Implementation is perhaps a week per provider
 once credentials exist.
 
-### 1.2 Uploaded documents are thrown away
+### 1.2 Uploaded documents are thrown away — FIXED 7 August 2026
+
+Documents now live in the database, encrypted with AES-256-GCM. Against the
+storage adapter's own advice, which is right at scale and was losing to an
+ephemeral disk in practice. `STORAGE_DRIVER=s3` remains one config change away
+and the `StoredObject` model says when to take it.
+
+The original text follows.
+
+#### Original
 
 `STORAGE_DRIVER=local` writes to the container's `/tmp`, which Render wipes on
 every deploy and restart. An applicant's passport photograph survives until the
@@ -56,9 +65,22 @@ Cloudflare R2, Backblaze B2, AWS S3 — with server-side encryption, versioning
 off, and a lifecycle rule matching the retention decision in §3.2. The adapter
 already exists; this is configuration plus a bucket.
 
-### 1.2b Reviewers cannot see the documents they are reviewing
+### 1.2b Reviewers cannot see the documents they are reviewing — FIXED 7 August 2026
 
-Found on 6 August 2026, while answering "is the product done".
+The case screen shows each side of each document, with zoom, rotate, and the
+extracted fields alongside. Three defects were in the way, none visible from
+the code alone:
+
+- The image endpoint answered 414 to every request ever made to it, because a
+  storage key is longer than Fastify's default cap on path parameters.
+- Access control depended on which storage driver was configured; with anything
+  but the local filesystem, any authenticated caller could fetch any object.
+- A two-sided document was stored as two unrelated documents, and the pipeline
+  examined one of them.
+
+The original text follows.
+
+#### Original
 
 There is no endpoint that serves a document image, and no `<img>` anywhere in
 the reviewer console — it lists documents by type and status only. So the
@@ -156,6 +178,7 @@ launch rather than after.
 | Workers share the API process | `RUN_WORKER_IN_PROCESS=true`; a slow job competes with requests | $7/month |
 | Sanctions refresh is manual | `npm run watchlist:refresh` by hand. A stale watchlist is a compliance failure that looks like normal operation | 1 day to schedule |
 | No PEP screening | No free source exists; commercial registers are the product | Vendor cost |
+| ~~No second factor on the console~~ | Fixed 7 August 2026: TOTP with recovery codes, per-account lockout | — |
 | Secrets never rotated | `PII_ENCRYPTION_KEY` has no rotation path, and rotating it makes existing data unreadable | 2–3 days for envelope re-encryption |
 | No rate limiting beyond per-credential | Nothing in front of the API | 1 day |
 
