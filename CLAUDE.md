@@ -70,6 +70,12 @@ npm test              # unit and integration; needs the local database
 npm run test:browser  # a real browser against production-shaped builds
 ```
 
+**Stop `npm run dev` before running the tests.** They share one database, and
+a running worker consumes the queue jobs the pipeline tests are waiting on —
+which shows up as two or three unrelated tests failing intermittently and sends
+you hunting for a bug that is not there. It cost three diagnoses before I
+noticed the dev worker was still up.
+
 **`npm test` is not enough on its own.** Two bugs reached production that it
 could not see, because the dev servers proxy `/v1` to the API and make
 everything same-origin while a deployment puts the console, the page and the
