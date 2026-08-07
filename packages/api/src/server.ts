@@ -10,6 +10,7 @@ import { authPlugin, replyError } from './auth.js';
 import applicantsRoutes from './routes/applicants.js';
 import decisionRoutes from './routes/decisions.js';
 import configRoutes from './routes/config.js';
+import twoFactorRoutes from './routes/twofactor.js';
 import demoRoutes from './routes/demo.js';
 import kybRoutes from './routes/kyb.js';
 import supportRoutes from './routes/support.js';
@@ -281,6 +282,7 @@ export async function buildServer() {
   await app.register(applicantsRoutes);
   await app.register(decisionRoutes);
   await app.register(configRoutes);
+  await app.register(twoFactorRoutes);
   await app.register(kybRoutes);
   await app.register(supportRoutes);
   await app.register(transactionRoutes);

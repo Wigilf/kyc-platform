@@ -33,7 +33,9 @@ const configRoutes: FastifyPluginAsync = async (app) => {
 
       const user = await prisma.user.findFirst({
         where: { email: email.toLowerCase(), isActive: true },
-        include: { tenant: { select: { id: true, name: true, slug: true } } },
+        include: {
+          tenant: { select: { id: true, name: true, slug: true, requireTwoFactor: true } },
+        },
       });
 
       const { hashPassword, verifyPassword } = await import('@kyc/core');
@@ -44,17 +46,46 @@ const configRoutes: FastifyPluginAsync = async (app) => {
         throw invalid('Invalid credentials');
       }
 
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          lastLoginAt: new Date(),
-          // Accounts created under the old unsalted scheme are upgraded the
-          // first time their owner signs in, without anyone having to reset.
-          ...(check.needsRehash ? { passwordHash: hashPassword(password) } : {}),
-        },
-      });
+      // Accounts created under the old unsalted scheme are upgraded the first
+      // time their owner signs in, without anyone having to reset.
+      if (check.needsRehash) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { passwordHash: hashPassword(password) },
+        });
+      }
+
+      // With a second factor enrolled, the password buys only the right to
+      // present a code. Issuing the session now and verifying afterwards would
+      // mean the session existed, and whatever held it was already inside.
+      if (user.mfaEnabledAt && user.mfaSecret) {
+        return {
+          mfaRequired: true,
+          challenge: signToken(
+            { sub: user.id, kind: 'mfa-challenge', tenantId: user.tenantId },
+            300,
+          ),
+        };
+      }
+
+      // A tenant that mandates a second factor cannot be entered without one,
+      // even by an account that has not set one up — otherwise the requirement
+      // is advice.
+      if (user.tenant.requireTwoFactor) {
+        return {
+          mfaRequired: true,
+          mfaEnrolmentRequired: true,
+          challenge: signToken(
+            { sub: user.id, kind: 'mfa-enrol', tenantId: user.tenantId },
+            600,
+          ),
+        };
+      }
+
+      await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
       return {
+        mfaRequired: false,
         token: signToken(
           { sub: user.id, kind: 'user', tenantId: user.tenantId, role: user.role, email: user.email },
           8 * 3600,

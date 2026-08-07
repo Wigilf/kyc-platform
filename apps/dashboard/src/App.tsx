@@ -7,6 +7,7 @@ import Cases from './pages/Cases';
 import Login from './pages/Login';
 import Overview from './pages/Overview';
 import Rules from './pages/Rules';
+import Security from './pages/Security';
 import Screening from './pages/Screening';
 
 const NAV = [
@@ -48,6 +49,9 @@ function Shell() {
           </NavLink>
         ))}
         <div className="sidebar-foot">
+          <NavLink to="/security" className="nav-link" style={{ marginBottom: 10 }}>
+            Security
+          </NavLink>
           <div>{session.user.name ?? session.user.email}</div>
           <div style={{ marginBottom: 8 }}>{session.user.role.replace(/_/g, ' ').toLowerCase()}</div>
           <button onClick={signOut} style={{ padding: '4px 10px', fontSize: 12 }}>
@@ -80,6 +84,7 @@ export default function App() {
         <Route path="cases" element={<Cases />} />
         <Route path="screening" element={<Screening />} />
         <Route path="rules" element={<Rules />} />
+        <Route path="security" element={<Security />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

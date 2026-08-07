@@ -21,20 +21,24 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Tenant {
-  id            String   @id @default(cuid())
-  name          String
-  slug          String   @unique
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
   // Country of incorporation of the regulated entity; drives default rulesets.
-  homeCountry   String   @default("GBR")
+  homeCountry      String   @default("GBR")
   // Sector affects which templates and retention defaults apply.
-  industry      Industry @default(FINTECH)
-  dataResidency String   @default("eu")
+  industry         Industry @default(FINTECH)
+  dataResidency    String   @default("eu")
   // Retention clock starts at end of business relationship, not at collection.
-  retentionDays Int      @default(2555) // 7 years, typical AML record-keeping floor
-  settings      Json     @default("{}")
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  retentionDays    Int      @default(2555) // 7 years, typical AML record-keeping floor
+  settings         Json     @default("{}")
+  /// Whether every reviewer in this tenant must hold a second factor.
+  /// Off by default so enabling it is a decision someone makes, not a surprise
+  /// that locks a team out of their own console.
+  requireTwoFactor Boolean  @default(false)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   apiKeys           ApiKey[]
   users             User[]
@@ -95,20 +99,31 @@ enum Env {
 }
 
 model User {
-  id           String    @id @default(cuid())
-  tenantId     String
-  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  email        String
-  name         String
-  role         UserRole  @default(AGENT)
+  id                String    @id @default(cuid())
+  tenantId          String
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email             String
+  name              String
+  role              UserRole  @default(AGENT)
   // Compliance officers may need scoping to a subset of queues/countries.
-  scopes       String[]  @default([])
-  passwordHash String?
-  mfaSecret    String?
-  isActive     Boolean   @default(true)
-  lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  scopes            String[]  @default([])
+  passwordHash      String?
+  /// TOTP shared secret, encrypted at rest. A second factor whose secret sits
+  /// in plaintext beside the password hash is one credential wearing a hat.
+  mfaSecret         String?
+  mfaEnabledAt      DateTime?
+  /// Highest time step already spent, so a code cannot be used twice.
+  mfaLastStep       Int?
+  /// Hashes of unused recovery codes. The codes themselves are shown once.
+  mfaRecoveryHashes String[]  @default([])
+  /// Consecutive failures, and when the account stops accepting attempts.
+  /// Six digits is a million guesses; without a limit that is an afternoon.
+  mfaFailedAttempts Int       @default(0)
+  mfaLockedUntil    DateTime?
+  isActive          Boolean   @default(true)
+  lastLoginAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   reviews         Review[]
   assignedCases   Case[]           @relation("CaseAssignee")

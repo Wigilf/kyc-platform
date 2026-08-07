@@ -102,10 +102,38 @@ export const api = {
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
 
-  async login(email: string, password: string): Promise<Session> {
-    const session = await request<Session>('/v1/auth/login', {
+  /**
+   * Step one. Returns either a session or a challenge to answer with a code.
+   *
+   * The two outcomes are deliberately different shapes rather than a session
+   * with a flag on it: nothing should be able to treat a half-finished sign-in
+   * as a finished one by ignoring a boolean.
+   */
+  async login(
+    email: string,
+    password: string,
+  ): Promise<{ done: true; session: Session } | { done: false; challenge: string; enrolmentRequired: boolean }> {
+    const result = await request<
+      Session & { mfaRequired?: boolean; challenge?: string; mfaEnrolmentRequired?: boolean }
+    >('/v1/auth/login', { method: 'POST', body: { email, password } });
+
+    if (result.mfaRequired && result.challenge) {
+      return {
+        done: false,
+        challenge: result.challenge,
+        enrolmentRequired: Boolean(result.mfaEnrolmentRequired),
+      };
+    }
+
+    saveSession(result);
+    return { done: true, session: result };
+  },
+
+  /** Step two. */
+  async loginWithCode(challenge: string, code: string): Promise<Session> {
+    const session = await request<Session>('/v1/auth/login/2fa', {
       method: 'POST',
-      body: { email, password },
+      body: { challenge, code },
     });
     saveSession(session);
     return session;

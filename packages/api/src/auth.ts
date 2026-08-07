@@ -171,6 +171,20 @@ async function authenticateBearer(request: FastifyRequest): Promise<Caller | nul
     };
   }
 
+  // Only a session token is a session.
+  //
+  // This used to treat anything that was not an applicant token as a user
+  // token and look the subject up — which meant the short-lived challenge
+  // issued after a correct password, whose entire purpose is to be useless
+  // until a second factor is presented, authenticated as the user it named.
+  // The second factor was decorative for as long as that was true.
+  if (payload.kind !== 'user') {
+    throw new KycError(
+      'UNAUTHORIZED',
+      'This token is not a session token and cannot be used to authenticate requests',
+    );
+  }
+
   const user = await prisma.user.findFirst({
     where: { id: payload.sub, tenantId: payload.tenantId, isActive: true },
     select: { id: true, role: true, email: true, tenantId: true },
@@ -203,6 +217,10 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
       path === '/openapi.json' ||
       path.startsWith('/docs') ||
       path === '/v1/auth/login' ||
+      // Step two of signing in. The challenge token issued by step one is the
+      // credential, and it is verified inside the handler; a bearer session is
+      // precisely what the caller does not have yet.
+      path === '/v1/auth/login/2fa' ||
       // Public only when DEMO_MODE is on. Enumerated here rather than matched by
       // prefix so a future /v1/demo/* route cannot become public by accident.
       (path === '/v1/demo/sessions' && process.env.DEMO_MODE === 'true') ||
