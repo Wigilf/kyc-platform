@@ -40,7 +40,8 @@
     "deploy": "dotenv -e .env -- tsx scripts/deploy.mts",
     "make:specimen": "tsx scripts/make-specimen.mts",
     "test:browser": "dotenv -e .env -- tsx scripts/e2e-browser.mts",
-    "storage:migrate": "dotenv -e .env -- tsx scripts/storage-migrate.mts"
+    "storage:migrate": "dotenv -e .env -- tsx scripts/storage-migrate.mts",
+    "csca:import": "tsx scripts/import-csca.mts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -1,17 +1,16 @@
-node_modules/
-dist/
-.data/
-*.tsbuildinfo
-.env
-.env.local
-.DS_Store
-coverage/
-packages/db/generated/
-.render-secrets.local
 
 # Database dumps contain applicant data — never committed.
-backups/
-
 # Screenshots from a failed browser run.
-.e2e-*.png
+*.tsbuildinfo
+.DS_Store
+.data/
 .deploy.lock
+.e2e-*.png
+.env
+.env.local
+.render-secrets.local
+backups/
+coverage/
+dist/
+node_modules/
+packages/db/generated/

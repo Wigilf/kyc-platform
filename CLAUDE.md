@@ -68,6 +68,8 @@ npm run dev           # api + worker + reviewer console
 npm run dev:verify    # the public verification page
 npm test              # unit and integration; needs the local database
 npm run test:browser  # a real browser against production-shaped builds
+npm run csca:import   # trust anchors for chip verification
+npm run storage:migrate -- --to s3
 ```
 
 **Stop `npm run dev` before running the tests.** They share one database, and
@@ -151,6 +153,17 @@ merely expedient:
   system says rather than a comment nobody reads.
 
 ### Chip verification
+
+Trust anchors come from `npm run csca:import`, which fetches Germany's openly
+published CSCA master list — 588 certificates from 113 countries, no
+membership, no terms gate — and writes each as its own file so a country can be
+removed by deleting one. ICAO publishes a list too, behind a terms acceptance
+someone has to click; `--file` imports that or any other once downloaded.
+
+Importing is not trusting. Which countries to accept is a compliance decision,
+and the tool reports what it found per country so the decision is made with the
+facts visible.
+
 
 `packages/core/src/passive-auth.ts`, exposed as `POST /v1/applicants/:id/nfc`.
 
