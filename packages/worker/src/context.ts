@@ -155,7 +155,22 @@ export function adaptersFor(tenantId: string): AdapterRegistry {
     mode: (process.env.ADAPTER_MODE ?? 'mock') as 'mock' | 'live',
     // Real document reading is opt-in on its own switch, so it can be turned on
     // without implying the checks that still are not real.
-    ocr: (process.env.ADAPTER_OCR ?? 'mock') as 'mock' | 'tesseract',
+    ocr: (process.env.ADAPTER_OCR ?? 'mock') as 'mock' | 'tesseract' | 'didit',
+    // The provider that makes liveness, face matching and document
+    // authenticity real. Absent, the mocks stay and both UIs keep saying so.
+    ...(process.env.DIDIT_API_KEY
+      ? {
+          didit: {
+            apiKey: process.env.DIDIT_API_KEY,
+            ...(process.env.DIDIT_FACE_MATCH_THRESHOLD
+              ? { faceMatchThreshold: Number(process.env.DIDIT_FACE_MATCH_THRESHOLD) }
+              : {}),
+            ...(process.env.DIDIT_LIVENESS_THRESHOLD
+              ? { livenessThreshold: Number(process.env.DIDIT_LIVENESS_THRESHOLD) }
+              : {}),
+          },
+        }
+      : {}),
     ocrTimeoutMs: process.env.OCR_TIMEOUT_MS ? Number(process.env.OCR_TIMEOUT_MS) : undefined,
     ocrDebugText: process.env.OCR_DEBUG_TEXT === 'true',
     // A directory of PEM certificates from the ICAO PKD or a national master

@@ -24,7 +24,7 @@ import {
   stepLabel,
   transition,
 } from '@kyc/core';
-import { documentStorageKey } from '@kyc/adapters';
+import { documentStorageKey, simulatedCapabilities } from '@kyc/adapters';
 import { prisma } from '@kyc/db';
 import { adaptersFor, enqueueVerification } from '@kyc/worker';
 import {
@@ -630,7 +630,8 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
       // The widget shows this to the applicant. Someone being asked to
       // photograph their passport is entitled to know whether anything will
       // actually examine it.
-      simulated: (process.env.ADAPTER_MODE ?? 'mock') !== 'live',
+      simulated: simulatedCapabilities(adaptersFor(caller.tenantId)).length > 0,
+      simulatedChecks: simulatedCapabilities(adaptersFor(caller.tenantId)),
       outstanding: outstandingSteps(steps, completed).map((s) => ({
         id: s.id,
         type: s.type,

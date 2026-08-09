@@ -7,6 +7,12 @@ import {
   MockContactRiskAdapter,
   MockDeviceAdapter,
 } from './mock/signals.js';
+import {
+  DiditDocAuthAdapter,
+  DiditFaceMatchAdapter,
+  DiditLivenessAdapter,
+  DiditOcrAdapter,
+} from './live/didit.js';
 import { IcaoNfcAdapter } from './live/nfc-icao.js';
 import { TesseractOcrAdapter } from './live/ocr-tesseract.js';
 import { ConsoleNotificationAdapter } from './notifications.js';
@@ -21,6 +27,13 @@ export * from './notifications.js';
 export { MockOcrAdapter, MockDocAuthAdapter, MockNfcAdapter } from './mock/documents.js';
 export { TesseractOcrAdapter } from './live/ocr-tesseract.js';
 export type { TesseractOcrOptions } from './live/ocr-tesseract.js';
+export {
+  DiditOcrAdapter,
+  DiditDocAuthAdapter,
+  DiditLivenessAdapter,
+  DiditFaceMatchAdapter,
+} from './live/didit.js';
+export type { DiditOptions } from './live/didit.js';
 export { IcaoNfcAdapter } from './live/nfc-icao.js';
 export type { IcaoNfcOptions } from './live/nfc-icao.js';
 export {
@@ -54,7 +67,15 @@ export interface AdapterConfig {
    * that. Pinning them to a single switch would mean either shipping a real
    * reader that nobody can turn on, or implying an authenticity check exists.
    */
-  ocr?: 'mock' | 'tesseract';
+  ocr?: 'mock' | 'tesseract' | 'didit';
+  /**
+   * Credentials for the verification provider.
+   *
+   * Supplying them is what turns liveness, face matching and document
+   * authenticity from simulations into checks. Absent, the mocks stay and both
+   * UIs keep saying so.
+   */
+  didit?: { apiKey: string; faceMatchThreshold?: number; livenessThreshold?: number };
   /**
    * Budget for reading one document image. Worth raising on slow hardware: a
    * shared-CPU instance can take a hundred times longer than a laptop.
@@ -117,30 +138,46 @@ export interface AdapterConfig {
  * failure than a startup error.
  */
 export function createAdapters(config: AdapterConfig): AdapterRegistry {
-  if (config.mode === 'live') {
+  if (config.mode === 'live' && !config.didit) {
     throw new Error(
-      'ADAPTER_MODE=live requires real provider implementations. Implement the ' +
-        'adapter interfaces in @kyc/adapters/src/live/ and register them here. ' +
+      'ADAPTER_MODE=live requires a verification provider. Set DIDIT_API_KEY, or ' +
+        'implement another provider against the interfaces in @kyc/adapters/src/live/. ' +
         'Refusing to fall back to mock adapters, which would produce fabricated ' +
         'verification results in a production environment.',
     );
   }
 
   const declared = config.declaredSubjectSource ?? nullDeclaredSubjectSource();
+  const storage = createStorage(config.storage);
+
+  // One provider, three checks. Constructed once so they share the cache that
+  // stops a single document being paid for twice.
+  const didit = config.didit
+    ? {
+        ocr: new DiditOcrAdapter({ ...config.didit, storage, logger: config.logger }),
+        docAuth: new DiditDocAuthAdapter({ ...config.didit, storage, logger: config.logger }),
+        liveness: new DiditLivenessAdapter({ ...config.didit, storage, logger: config.logger }),
+        faceMatch: new DiditFaceMatchAdapter({ ...config.didit, storage, logger: config.logger }),
+      }
+    : null;
 
   return {
     ocr:
-      config.ocr === 'tesseract'
-        ? new TesseractOcrAdapter({
-            storage: createStorage(config.storage),
-            logger: config.logger,
-            ...(config.ocrTimeoutMs ? { timeoutMs: config.ocrTimeoutMs } : {}),
-            debugText: config.ocrDebugText ?? false,
-          })
-        : new MockOcrAdapter(declared),
-    docAuth: new MockDocAuthAdapter(),
-    liveness: new MockLivenessAdapter(),
-    faceMatch: new MockFaceMatchAdapter(),
+      config.ocr === 'didit' && didit
+        ? didit.ocr
+        : config.ocr === 'tesseract'
+          ? new TesseractOcrAdapter({
+              storage,
+              logger: config.logger,
+              ...(config.ocrTimeoutMs ? { timeoutMs: config.ocrTimeoutMs } : {}),
+              debugText: config.ocrDebugText ?? false,
+            })
+          : new MockOcrAdapter(declared),
+    // These three have no honest local implementation, so the provider is the
+    // only thing that makes them real.
+    docAuth: didit?.docAuth ?? new MockDocAuthAdapter(),
+    liveness: didit?.liveness ?? new MockLivenessAdapter(),
+    faceMatch: didit?.faceMatch ?? new MockFaceMatchAdapter(),
     nfc:
       config.trustedCscas && config.trustedCscas.length > 0
         ? new IcaoNfcAdapter({ trustedCscas: config.trustedCscas, logger: config.logger })
@@ -153,6 +190,28 @@ export function createAdapters(config: AdapterConfig): AdapterRegistry {
     storage: createStorage(config.storage),
     notifications: new ConsoleNotificationAdapter(config.logger),
   };
+}
+
+/**
+ * Which checks are still generated rather than performed.
+ *
+ * Derived from the adapters actually wired, not from an environment variable.
+ * `ADAPTER_MODE` was a single switch when everything was simulated together,
+ * and it stopped telling the truth the moment one capability could be real
+ * while another was not — a deployment reading documents for real but
+ * simulating liveness would either claim everything was real or claim nothing
+ * was. Both are wrong in a way that matters: a reviewer must not read a
+ * generated pass as evidence.
+ */
+export function simulatedCapabilities(registry: AdapterRegistry): string[] {
+  const capabilities: Array<[string, { name: string }]> = [
+    ['document reading', registry.ocr],
+    ['document authenticity', registry.docAuth],
+    ['liveness', registry.liveness],
+    ['face matching', registry.faceMatch],
+    ['device intelligence', registry.device],
+  ];
+  return capabilities.filter(([, a]) => a.name.startsWith('mock')).map(([label]) => label);
 }
 
 export function createStorage(config: AdapterConfig['storage']): StorageAdapter {

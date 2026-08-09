@@ -11,7 +11,9 @@ import {
   newSecret,
   validateRule,
 } from '@kyc/core';
+import { simulatedCapabilities } from '@kyc/adapters';
 import { prisma } from '@kyc/db';
+import { adaptersFor } from '@kyc/worker';
 import { requireBackend, requireRole, signToken, writeAudit } from '../auth.js';
 
 /**
@@ -154,7 +156,10 @@ const configRoutes: FastifyPluginAsync = async (app) => {
       // Drives the dashboard's banner: a reviewer must not read a simulated
       // pass as evidence that a document was checked.
       adapterMode: process.env.ADAPTER_MODE ?? 'mock',
-      simulated: (process.env.ADAPTER_MODE ?? 'mock') !== 'live',
+      // Named, not merely flagged. "Some checks are simulated" leaves a
+      // reviewer guessing which; the answer changes what they should trust.
+      simulated: simulatedCapabilities(adaptersFor(caller.tenantId)).length > 0,
+      simulatedChecks: simulatedCapabilities(adaptersFor(caller.tenantId)),
     };
   });
 
