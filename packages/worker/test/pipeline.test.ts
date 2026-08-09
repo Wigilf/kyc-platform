@@ -286,3 +286,50 @@ describe('audit trail', () => {
     expect(entries).toBe(0);
   });
 });
+
+describe('the same person applying twice', () => {
+  /**
+   * The identity fingerprint was computed on every applicant and compared
+   * against nothing. Duplicate detection ran on the document number alone, so
+   * one person with two passports — or with a document the reader could not
+   * read — arrived as two unrelated strangers.
+   */
+  it('is noticed even when the documents differ', async () => {
+    const identity = { firstName: 'Mara', lastName: 'Duplicate', dob: '1991-03-04', country: 'ITA' };
+    const first = await createApplicant('dupe-identity-a', identity);
+    const second = await createApplicant('dupe-identity-b', identity);
+
+    await run(first.applicant.id, first.tenant.id);
+    const result = await run(second.applicant.id, second.tenant.id);
+
+    const check = await prisma.check.findFirst({
+      where: { applicantId: second.applicant.id, type: 'DUPLICATE_IDENTITY' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    expect(check?.result).toBe('FAIL');
+    expect(check?.rejectLabels).toContain('DUPLICATE_ACCOUNT');
+    // A signal, not a verdict: families share surnames and birthdays collide.
+    expect(result.reviewStatus).not.toBe('APPROVED');
+    expect(result.reviewStatus).not.toBe('REJECTED_FINAL');
+  });
+
+  it('does not flag two applicants who have declared nothing', async () => {
+    // Both fingerprints are null. Two unknowns are not the same person, and
+    // treating them as one would put every half-finished signup in the queue.
+    const a = await createApplicant('dupe-empty-a');
+    const b = await createApplicant('dupe-empty-b');
+    await prisma.applicant.updateMany({
+      where: { id: { in: [a.applicant.id, b.applicant.id] } },
+      data: { identityFingerprint: null },
+    });
+
+    await run(a.applicant.id, a.tenant.id);
+    await run(b.applicant.id, b.tenant.id);
+
+    const check = await prisma.check.findFirst({
+      where: { applicantId: b.applicant.id, type: 'DUPLICATE_IDENTITY' },
+    });
+    expect(check).toBeNull();
+  });
+});

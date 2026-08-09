@@ -87,7 +87,7 @@ export interface FixtureOptions {
 export async function createApplicant(slug: string, opts: FixtureOptions = {}) {
   const tenant = await testTenant();
   const level = await testLevel(tenant.id);
-  const { encryptJson } = await import('@kyc/core');
+  const { encryptJson, identityFingerprint } = await import('@kyc/core');
   const piiKey = process.env.PII_ENCRYPTION_KEY;
 
   const applicant = await prisma.applicant.create({
@@ -117,6 +117,15 @@ export async function createApplicant(slug: string, opts: FixtureOptions = {}) {
       reviewStatus: 'PENDING',
       status: 'QUEUED',
       submittedAt: new Date(),
+      // Set exactly as the API sets it. Fixtures that leave it null cannot
+      // exercise anything that compares identities, and a test written against
+      // such a fixture passes by describing a situation that never occurs.
+      identityFingerprint: identityFingerprint({
+        firstName: opts.firstName ?? 'Test',
+        lastName: opts.lastName ?? 'Person',
+        dob: opts.dob ?? dobForSlug(slug),
+        country: opts.country ?? 'ITA',
+      }),
       piiCiphertext: piiKey
         ? encryptJson({ address: 'Via Test 1, 20100 Milano' }, piiKey)
         : null,

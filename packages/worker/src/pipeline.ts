@@ -978,6 +978,84 @@ async function runApplicantDataStep(
         ]
       : [],
   });
+
+  return 1 + (await checkForTheSamePersonAgain(applicant));
+}
+
+/**
+ * Has this person already applied under a different account?
+ *
+ * The identity fingerprint — a hash of name, date of birth and country — was
+ * being computed and stored on every applicant and then never compared against
+ * anything. Duplicate detection ran on the document number alone, so the same
+ * person applying twice with a second passport, or with a document the reader
+ * could not read, passed as two unrelated strangers. That is the plainest
+ * version of the account-farming pattern a KYC platform exists to notice.
+ *
+ * Not a rejection on its own: families share surnames, dates of birth collide,
+ * and a legitimate applicant may be recovering an account they lost access to.
+ * It is a signal weighted for a human to look at.
+ */
+async function checkForTheSamePersonAgain(
+  applicant: ApplicantWithRelations,
+): Promise<number> {
+  const fingerprint = applicant.identityFingerprint;
+  // An identity we do not know is not an identity we can match. Two applicants
+  // who have both supplied nothing are not the same person.
+  if (!fingerprint) return 0;
+
+  const others = await prisma.applicant.findMany({
+    where: {
+      tenantId: applicant.tenantId,
+      identityFingerprint: fingerprint,
+      id: { not: applicant.id },
+    },
+    select: { id: true, externalUserId: true, reviewStatus: true },
+    take: 10,
+  });
+  if (others.length === 0) return 0;
+
+  // One fact, noticed twice, must not be charged twice.
+  //
+  // The document-number check already flags a repeat applicant, and when both
+  // fire they are observing the same thing — this person has been here before.
+  // Adding both contributions took a first-time applicant to a risk score of
+  // 98 on the strength of a single observation. The finding is still recorded,
+  // because *how* the repeat was spotted is worth a reviewer's attention; the
+  // score is not moved a second time.
+  const alreadyCounted = await prisma.check.findFirst({
+    where: {
+      applicantId: applicant.id,
+      type: 'DUPLICATE_IDENTITY',
+      result: 'FAIL',
+      documentId: { not: null },
+    },
+    select: { id: true },
+  });
+
+  await recordCheck(applicant.id, null, {
+    type: 'DUPLICATE_IDENTITY',
+    status: 'COMPLETED',
+    result: 'FAIL',
+    rejectLabels: ['DUPLICATE_ACCOUNT'],
+    riskContribution: alreadyCounted ? 0 : 40,
+    provider: 'internal',
+    findings: [
+      {
+        code: 'DUPLICATE_DECLARED_IDENTITY',
+        severity: 'HIGH' as const,
+        message:
+          `The same name, date of birth and country are already registered to ` +
+          `${others.length} other applicant(s).`,
+        detail: {
+          others: others.map((o) => ({
+            externalUserId: o.externalUserId,
+            reviewStatus: o.reviewStatus,
+          })),
+        },
+      },
+    ],
+  });
   return 1;
 }
 
