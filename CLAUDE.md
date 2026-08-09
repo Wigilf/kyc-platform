@@ -30,6 +30,7 @@ There are three things a user can touch:
 | `packages/adapters` | The boundary to outside providers — document reading, liveness, sanctions matching. Currently simulated; `ADAPTER_MODE=live` refuses to start rather than fake results |
 | `packages/worker` | Background jobs: the verification pipeline, screening, webhook delivery, watchlist ingestion |
 | `packages/api` | The HTTP API and all authentication |
+| `packages/mrtd` | Talking to a passport chip: Basic Access Control key derivation, ISO 9797-1 message authentication, mutual authentication. Verified against ICAO's own published worked examples, so it can be trusted without a device |
 | `packages/agent` | The AI support agent that answers applicant questions, with tool permissions per intent |
 
 ## Things that are load-bearing

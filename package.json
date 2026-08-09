@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "npm run build:packages && npm run build:dashboard && npm run build:websdk && npm run build:verify",
-    "build:packages": "tsc --build packages/core packages/db packages/adapters packages/agent packages/api packages/worker",
+    "build:packages": "tsc --build packages/core packages/mrtd packages/db packages/adapters packages/agent packages/api packages/worker",
     "build:dashboard": "npm run -w @kyc/dashboard build",
     "build:websdk": "npm run -w @kyc/websdk build",
     "dev:websdk": "npm run -w @kyc/websdk dev",
