@@ -1,0 +1,15 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler"
+    // Deliberately no `paths` alias for @kyc/mrtd. Expo honours tsconfig paths
+    // in Metro as well as in TypeScript, so an alias pointing at the source
+    // made the bundler try to resolve `./crypto/des.js` inside a directory of
+    // .ts files. Resolving through node_modules instead gives both the built
+    // package, which is the one that ships.
+  },
+  "include": ["**/*.ts", "**/*.tsx"]
+}

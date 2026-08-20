@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Identity Check",
+    "slug": "kyc-identity-check",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "test.example.kyc.identitycheck",
+      "infoPlist": {
+        "NFCReaderUsageDescription": "Reading the chip in your passport confirms it is genuine.",
+        "com.apple.developer.nfc.readersession.iso7816.select-identifiers": ["A0000002471001"]
+      },
+      "entitlements": {
+        "com.apple.developer.nfc.readersession.formats": ["TAG"]
+      }
+    },
+    "android": {
+      "package": "test.example.kyc.identitycheck",
+      "permissions": ["android.permission.NFC"]
+    },
+    "plugins": ["react-native-nfc-manager"]
+  }
+}

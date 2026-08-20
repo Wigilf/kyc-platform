@@ -9,6 +9,10 @@
 .env
 .env.local
 .render-secrets.local
+/tmp/mobile-export
+apps/mobile/.expo/
+apps/mobile/android/
+apps/mobile/ios/
 backups/
 coverage/
 dist/

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv } from 'node:crypto';
+import { tripleDesCbcDecrypt, tripleDesCbcEncrypt } from './crypto/des.js';
 import {
   buildMutualAuthenticate,
   completeMutualAuthenticate,
@@ -28,6 +28,8 @@ import {
  * signature; this only fetches it. A reader that decided for itself whether a
  * document was genuine would be a reader an attacker could reimplement.
  */
+
+const ZERO_IV = new Uint8Array(8);
 
 /** Whatever moves bytes to the chip. A phone's NFC stack, or a test double. */
 export interface ChipTransport {
@@ -194,9 +196,9 @@ export function wrapCommand(session: SessionKeys, plain: Buffer): Buffer {
 
   const parts: Buffer[] = [];
   if (body.length > 0) {
-    const cipher = createCipheriv('des-ede3-cbc', expand3des(session.ksEnc), Buffer.alloc(8));
-    cipher.setAutoPadding(false);
-    const encrypted = Buffer.concat([cipher.update(padIso9797Method2(body)), cipher.final()]);
+    const encrypted = Buffer.from(
+      tripleDesCbcEncrypt(session.ksEnc, ZERO_IV, padIso9797Method2(body)),
+    );
     // Tag 0x87, with a leading 0x01 marking ISO padding.
     parts.push(tlv(0x87, Buffer.concat([Buffer.from([0x01]), encrypted])));
   }
@@ -235,9 +237,7 @@ export function unwrapResponse(session: SessionKeys, response: Buffer): Buffer {
   const encrypted = fields.get(0x87);
   if (!encrypted) return Buffer.alloc(0);
 
-  const decipher = createDecipheriv('des-ede3-cbc', expand3des(session.ksEnc), Buffer.alloc(8));
-  decipher.setAutoPadding(false);
-  const plain = Buffer.concat([decipher.update(encrypted.subarray(1)), decipher.final()]);
+  const plain = Buffer.from(tripleDesCbcDecrypt(session.ksEnc, ZERO_IV, encrypted.subarray(1)));
   return unpadIso9797Method2(plain);
 }
 

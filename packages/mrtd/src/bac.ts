@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { tripleDesCbcDecrypt, tripleDesCbcEncrypt } from './crypto/des.js';
+import { randomBytes, sha1 } from './crypto/sha1.js';
 
 /**
  * Basic Access Control — the conversation that opens a passport chip.
@@ -93,7 +94,7 @@ export function checkDigit(input: string): string {
  */
 export function deriveBacKeys(input: MrzKeyInput | string): BacKeys {
   const information = typeof input === 'string' ? input : mrzInformation(input);
-  const kSeed = createHash('sha1').update(information, 'latin1').digest().subarray(0, 16);
+  const kSeed = Buffer.from(sha1(Buffer.from(information, 'latin1'))).subarray(0, 16);
   return {
     kSeed,
     kEnc: deriveKey(kSeed, 1),
@@ -105,7 +106,7 @@ export function deriveBacKeys(input: MrzKeyInput | string): BacKeys {
 export function deriveKey(kSeed: Buffer, counter: 1 | 2): Buffer {
   const c = Buffer.alloc(4);
   c.writeUInt32BE(counter);
-  const digest = createHash('sha1').update(Buffer.concat([kSeed, c])).digest();
+  const digest = Buffer.from(sha1(Buffer.concat([kSeed, c])));
   return Buffer.concat([adjustParity(digest.subarray(0, 8)), adjustParity(digest.subarray(8, 16))]);
 }
 
@@ -153,23 +154,14 @@ export function mac(key: Buffer, data: Buffer): Buffer {
 /**
  * Single DES, expressed as triple DES with one key.
  *
- * Node's default OpenSSL provider dropped single DES — `des-cbc` and `des-ecb`
- * now throw "unsupported" — while triple DES remains. Since 3DES is
- * encrypt-decrypt-encrypt, giving it the same key three times cancels the
- * middle step and leaves exactly single DES. That avoids either shipping a
- * hand-rolled DES or asking every deployment to start Node with a legacy flag.
- *
- * The published test vectors are what prove the equivalence holds in practice
- * rather than only on paper.
+ * 3DES is encrypt-decrypt-encrypt, so the same key three times cancels the
+ * middle step and leaves exactly single DES. The cipher underneath is this
+ * package's own, which is what lets the identical code run in Node and on a
+ * phone — React Native has no crypto module, and Node's default provider has
+ * dropped single DES anyway.
  */
-function tripled(key: Buffer): Buffer {
-  return Buffer.concat([key, key, key]);
-}
-
 function desCbcEncrypt(key: Buffer, data: Buffer): Buffer {
-  const cipher = createCipheriv('des-ede3-cbc', tripled(key), Buffer.alloc(8));
-  cipher.setAutoPadding(false);
-  return Buffer.concat([cipher.update(data), cipher.final()]);
+  return Buffer.from(tripleDesCbcEncrypt(key, ZERO_IV, data));
 }
 
 function desEcbEncrypt(key: Buffer, block: Buffer): Buffer {
@@ -178,10 +170,10 @@ function desEcbEncrypt(key: Buffer, block: Buffer): Buffer {
 }
 
 function desEcbDecrypt(key: Buffer, block: Buffer): Buffer {
-  const decipher = createDecipheriv('des-ede3-cbc', tripled(key), Buffer.alloc(8));
-  decipher.setAutoPadding(false);
-  return Buffer.concat([decipher.update(block), decipher.final()]);
+  return Buffer.from(tripleDesCbcDecrypt(key, ZERO_IV, block));
 }
+
+const ZERO_IV = new Uint8Array(8);
 
 /** A mandatory 0x80 then zeroes to the block boundary — always added. */
 export function padIso9797Method2(data: Buffer): Buffer {
@@ -220,15 +212,13 @@ export interface MutualAuthChallenge {
 export function buildMutualAuthenticate(
   keys: BacKeys,
   rndIc: Buffer,
-  rndIfd: Buffer = randomBytes(8),
-  kIfd: Buffer = randomBytes(16),
+  rndIfd: Buffer = Buffer.from(randomBytes(8)),
+  kIfd: Buffer = Buffer.from(randomBytes(16)),
 ): MutualAuthChallenge {
   if (rndIc.length !== 8) throw new Error("The chip's random must be 8 bytes");
 
   const s = Buffer.concat([rndIfd, rndIc, kIfd]);
-  const cipher = createCipheriv('des-ede3-cbc', expand3des(keys.kEnc), Buffer.alloc(8));
-  cipher.setAutoPadding(false);
-  const eIfd = Buffer.concat([cipher.update(s), cipher.final()]);
+  const eIfd = Buffer.from(tripleDesCbcEncrypt(keys.kEnc, ZERO_IV, s));
   const mIfd = mac(keys.kMac, eIfd);
 
   return { commandData: Buffer.concat([eIfd, mIfd]), rndIfd, kIfd };
@@ -262,9 +252,7 @@ export function completeMutualAuthenticate(
     throw new Error("The chip's response failed authentication; the keys do not match");
   }
 
-  const decipher = createDecipheriv('des-ede3-cbc', expand3des(keys.kEnc), Buffer.alloc(8));
-  decipher.setAutoPadding(false);
-  const r = Buffer.concat([decipher.update(eIc), decipher.final()]);
+  const r = Buffer.from(tripleDesCbcDecrypt(keys.kEnc, ZERO_IV, eIc));
 
   // The chip echoes our random back. If it does not, something is replaying.
   if (!r.subarray(8, 16).equals(challenge.rndIfd)) {

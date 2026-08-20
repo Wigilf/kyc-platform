@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['packages/*/test/**/*.test.ts'],
+    include: ['packages/*/test/**/*.test.ts', 'apps/*/test/**/*.test.ts'],
     setupFiles: ['./vitest.setup.ts'],
     // The regression suite drives the pipeline against the real database rather
     // than a mock of it, and the bugs it guards were all in how records are read
