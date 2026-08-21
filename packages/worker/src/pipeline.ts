@@ -208,23 +208,82 @@ async function runStep(
       return runProofOfAddressStep(step, applicant, adapters, ctx);
     case 'APPLICANT_DATA':
       return runApplicantDataStep(step, applicant);
+    case 'NFC_READ':
+      return runChipStep(step, applicant);
     default:
-      // Steps with no automated component (video interview, e-signature) are
-      // recorded as skipped so the audit shows they were considered.
+      // Steps with no automated component — a video interview, a wet
+      // signature — are recorded so the audit shows they were considered.
+      //
+      // And if the level marked the step *required*, that is recorded as
+      // outstanding rather than merely noted. It used to be noted: a skipped
+      // check with an INFO finding and no label, which contributes nothing, so
+      // an applicant could be approved automatically while a step the level
+      // demanded had simply never happened. A step that did not run is not a
+      // step that passed — the same mistake as a check reporting success when
+      // nothing was checked.
       await recordCheck(applicant.id, null, {
         type: 'MANUAL',
         status: 'SKIPPED',
+        result: step.required ? 'INCONCLUSIVE' : undefined,
+        rejectLabels: step.required ? ['REQUIRED_STEP_NOT_PERFORMED'] : [],
         provider: 'internal',
         findings: [
           {
             code: 'NO_AUTOMATED_CHECK',
-            severity: 'INFO',
-            message: `Step ${step.id} (${step.type}) has no automated check.`,
+            severity: step.required ? ('MEDIUM' as const) : ('INFO' as const),
+            message: step.required
+              ? `Step ${step.id} (${step.type}) is required and has no automated check, so a person must complete it.`
+              : `Step ${step.id} (${step.type}) has no automated check.`,
           },
         ],
       });
       return 1;
   }
+}
+
+/**
+ * The chip, if one has been read.
+ *
+ * Reading it happens on a phone and arrives separately, through
+ * `POST /v1/applicants/:id/nfc`. This step's job is only to notice whether it
+ * did — and to say so when a level asked for a chip and none came, rather than
+ * letting the requirement evaporate.
+ */
+async function runChipStep(
+  step: StepDefinition,
+  applicant: ApplicantWithRelations,
+): Promise<number> {
+  // Read from the database rather than from the loaded applicant: the chip
+  // read arrives on its own endpoint, possibly while this pipeline run is
+  // already under way, and the relation was loaded before that.
+  const chip = await prisma.check.findFirst({
+    where: { applicantId: applicant.id, type: 'NFC_CHIP', status: 'COMPLETED' },
+    select: { id: true },
+  });
+
+  if (chip) {
+    // Already recorded by the endpoint, with the verdict and the findings. Not
+    // re-run here: the phone is gone and the chip with it.
+    return 0;
+  }
+
+  await recordCheck(applicant.id, null, {
+    type: 'NFC_CHIP',
+    status: 'SKIPPED',
+    result: step.required ? 'INCONCLUSIVE' : undefined,
+    rejectLabels: step.required ? ['REQUIRED_STEP_NOT_PERFORMED'] : [],
+    provider: 'internal',
+    findings: [
+      {
+        code: 'CHIP_NOT_READ',
+        severity: step.required ? ('MEDIUM' as const) : ('INFO' as const),
+        message: step.required
+          ? 'This level requires the document chip to be read, and no chip read has been submitted.'
+          : 'No chip read was submitted. Optional for this level.',
+      },
+    ],
+  });
+  return 1;
 }
 
 async function runDocumentStep(

@@ -333,3 +333,70 @@ describe('the same person applying twice', () => {
     expect(check).toBeNull();
   });
 });
+
+describe('a required step with nothing to run it', () => {
+  /**
+   * A step the level marks required, with no automated component, used to be
+   * recorded as skipped with an INFO note and no label — which contributes
+   * nothing, so the applicant could be approved automatically while a step the
+   * level demanded had simply never happened.
+   */
+  it('blocks automatic approval rather than passing quietly', async () => {
+    const { applicant, tenant } = await createApplicant('required-step');
+
+    // Add a step nothing can perform, and require it.
+    const level = await prisma.verificationLevel.findFirstOrThrow({
+      where: { id: applicant.levelId },
+    });
+    const steps = JSON.parse(JSON.stringify(level.steps)) as Array<Record<string, unknown>>;
+    steps.push({ id: 'interview', type: 'VIDEO_INTERVIEW', order: 99, config: {}, required: true });
+    await prisma.verificationLevel.update({
+      where: { id: level.id },
+      data: { steps: steps as never },
+    });
+
+    try {
+      const result = await run(applicant.id, tenant.id);
+
+      const check = await prisma.check.findFirstOrThrow({
+        where: { applicantId: applicant.id, type: 'MANUAL' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(check.rejectLabels).toContain('REQUIRED_STEP_NOT_PERFORMED');
+      // A step that did not run is not a step that passed.
+      expect(result.reviewStatus).not.toBe('APPROVED');
+    } finally {
+      await prisma.verificationLevel.update({
+        where: { id: level.id },
+        data: { steps: level.steps as never },
+      });
+    }
+  });
+
+  it('says nothing when the same step is optional', async () => {
+    const { applicant, tenant } = await createApplicant('optional-step');
+    const level = await prisma.verificationLevel.findFirstOrThrow({
+      where: { id: applicant.levelId },
+    });
+    const steps = JSON.parse(JSON.stringify(level.steps)) as Array<Record<string, unknown>>;
+    steps.push({ id: 'interview', type: 'VIDEO_INTERVIEW', order: 99, config: {}, required: false });
+    await prisma.verificationLevel.update({
+      where: { id: level.id },
+      data: { steps: steps as never },
+    });
+
+    try {
+      await run(applicant.id, tenant.id);
+      const check = await prisma.check.findFirstOrThrow({
+        where: { applicantId: applicant.id, type: 'MANUAL' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(check.rejectLabels).toEqual([]);
+    } finally {
+      await prisma.verificationLevel.update({
+        where: { id: level.id },
+        data: { steps: level.steps as never },
+      });
+    }
+  });
+});

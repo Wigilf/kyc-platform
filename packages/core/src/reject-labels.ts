@@ -82,6 +82,12 @@ export const REJECT_LABELS: Record<string, RejectLabelDef> = Object.fromEntries(
       'retake the photo with the whole page in frame.',
       'Mandatory MRZ check digits absent from the read; the zone could not be ' +
       'verified. Absence, not mismatch — see MRZ_CHECKSUM_FAILED for the latter.'),
+    def('REQUIRED_STEP_NOT_PERFORMED', 'DOCUMENT_QUALITY', true, 0,
+      'One of the checks for your application has not been completed yet.',
+      'A step the level marks required produced no automated result — either it ' +
+      'has no automated component, or the evidence it needs has not arrived. ' +
+      'Carries no risk weight and blocks automatic approval: a step that did not ' +
+      'happen is not a step that passed.'),
     def('NOT_MACHINE_READABLE', 'DOCUMENT_QUALITY', false, 0,
       'Thanks — a reviewer will check this document by hand.',
       'The document type carries no machine-readable zone, so the automated ' +
