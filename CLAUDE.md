@@ -67,9 +67,10 @@ Break these and something important stops being true, usually silently.
 npm run bootstrap     # containers, migrations, seed data
 npm run dev           # api + worker + reviewer console
 npm run dev:verify    # the public verification page
-npm test              # unit and integration; needs the local database
+npm test              # 206 tests; needs the local database
 npm run test:browser  # a real browser against production-shaped builds
 npm run csca:import   # trust anchors for chip verification
+npm run levels:sync -- --tenant <slug> --dry-run
 npm run storage:migrate -- --to s3
 ```
 
@@ -134,6 +135,33 @@ Sharp edges that have already caught me out:
   source exists; the commercial registers are the product.
 
 Do not describe this as able to verify a real person's identity. It cannot yet.
+
+### Changing a verification level
+
+Provisioning **skips a level that already exists**, deliberately: a level is the
+rulebook a decision was made under, and editing it would rewrite the basis of
+every past approval. So a template change reaches nobody until
+`npm run levels:sync` creates a *new version* beside the old one. The previous
+version stays attached to the applicants decided under it.
+
+Compare canonically, not by `JSON.stringify` — Postgres reorders JSONB keys, so
+a plain comparison reports every level as changed and would churn the whole
+rulebook.
+
+### The chip, end to end
+
+1. The level offers an `NFC_READ` step. Optional by default: requiring it
+   strands every applicant without a phone and the app.
+2. The web flow shows a QR and a `kyc://` link carrying the token the page
+   already holds. Built by `chipLink` in the SDK — the host needs the identical
+   string to encode the QR, and two copies drifted apart immediately.
+3. The phone reads the chip and posts to `/v1/applicants/:id/nfc`.
+4. The pipeline's `NFC_READ` step notices whether a read arrived, and says so
+   when a level asked for one and none came.
+
+**Optional steps never appear in `outstanding`.** The checklist has to
+distinguish "optional and not done" from "done", or it draws a green tick
+against something nobody has done.
 
 ### Where documents live
 
