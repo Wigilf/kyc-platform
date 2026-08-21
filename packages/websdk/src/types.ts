@@ -23,6 +23,15 @@ export interface KycMountOptions {
    * duplicate. Never set it to hide the fact.
    */
   hideSimulationNotice?: boolean;
+  /**
+   * Turns a string into QR markup, for handing a chip-read link to a phone.
+   *
+   * Supplied by the host rather than bundled: a QR encoder would roughly double
+   * this widget's size for one screen, and an integrator with their own design
+   * system will want their own anyway. Absent, the link is offered to tap and
+   * to copy, which is all a phone user needs.
+   */
+  renderQr?: (text: string) => string;
   /** Fired on every step transition, for host-page analytics. */
   onEvent?: (event: KycEvent) => void;
 }
@@ -50,6 +59,8 @@ export interface KycHandle {
 }
 
 export interface Requirement {
+  /** Whether the level insists on this step. */
+  required?: boolean;
   id: string;
   type: string;
   label: string;

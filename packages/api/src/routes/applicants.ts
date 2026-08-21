@@ -638,6 +638,9 @@ const applicantsRoutes: FastifyPluginAsync = async (app) => {
         label: stepLabel(s),
         acceptedDocumentTypes: documentTypesForStep(s),
         requireBothSides: s.config.requireBothSides ?? false,
+        // Whether the applicant may move past it. A step they cannot complete
+        // and cannot skip is a dead end.
+        required: s.required,
       })),
       allSteps: steps.map((s) => ({
         id: s.id,

@@ -60,6 +60,7 @@ type View =
   | { kind: 'details'; step: Requirement }
   | { kind: 'capture'; step: Requirement; docType: string; side: string }
   | { kind: 'review'; step: Requirement; docType: string; side: string; blob: Blob; url: string }
+  | { kind: 'chip'; step: Requirement }
   | { kind: 'done' };
 
 /**
@@ -82,6 +83,32 @@ const FIELDS: Record<string, { label: string; type: string; autocomplete: string
   addressCity: { label: 'City', type: 'text', autocomplete: 'address-level2' },
   addressPostCode: { label: 'Postcode', type: 'text', autocomplete: 'postal-code' },
 };
+
+/**
+ * The link that hands a chip read to the phone.
+ *
+ * Exported because the host has to build the identical string to encode it as
+ * a QR — the widget renders synchronously and encoding is asynchronous, so the
+ * code is prepared in advance and looked up by the link itself. Two copies of
+ * this expression drifted apart within minutes of existing: the host built one
+ * without the origin fallback, and the QR silently stopped appearing.
+ *
+ * Absolute, always. `apiBaseUrl` is empty when the page and the API share an
+ * origin, which is the ordinary development setup, and an empty address in the
+ * link leaves the phone with nowhere to send what it read.
+ */
+export function chipLink(args: {
+  token: string;
+  applicantId: string;
+  apiBaseUrl?: string;
+}): string {
+  const api = args.apiBaseUrl || window.location.origin;
+  return (
+    `kyc://chip?token=${encodeURIComponent(args.token)}` +
+    `&applicant=${encodeURIComponent(args.applicantId)}` +
+    `&api=${encodeURIComponent(api)}`
+  );
+}
 
 export function mountWidget(options: KycMountOptions): KycHandle {
   const host =
@@ -191,6 +218,9 @@ export function mountWidget(options: KycMountOptions): KycHandle {
       case 'review':
         renderReview(view);
         break;
+      case 'chip':
+        renderChip(view);
+        break;
       case 'done':
         renderDone();
         break;
@@ -225,6 +255,35 @@ export function mountWidget(options: KycMountOptions): KycHandle {
         row.append(el('span', { class: 'tick' }, ''), el('span', {}, label));
         row.addEventListener('click', () => beginStep(outstanding));
         li.append(row);
+      } else if (!step.satisfied) {
+        // Offered but not required, and not yet done.
+        //
+        // These never appear in `outstanding`, which lists only what the level
+        // insists on — so the checklist used to draw them with a green tick as
+        // though they were finished. An optional step shown as complete is one
+        // nobody will ever do, which for the chip means the strongest evidence
+        // available is quietly never collected.
+        const optional = el('button', {
+          class: 'step-go optional',
+          type: 'button',
+          'aria-label': `Start: ${label} (optional)`,
+        });
+        optional.append(
+          el('span', { class: 'tick' }, ''),
+          el('span', {}, label),
+          el('span', { class: 'done-note' }, 'optional'),
+        );
+        optional.addEventListener('click', () =>
+          beginStep({
+            id: step.id,
+            type: step.type,
+            label,
+            acceptedDocumentTypes: step.acceptedDocumentTypes ?? [],
+            requireBothSides: step.requireBothSides ?? false,
+            required: false,
+          }),
+        );
+        li.append(optional);
       } else {
         // Done, but not locked. Someone who photographed the wrong document, or
         // mistyped their date of birth, needs a way to correct it without
@@ -301,6 +360,16 @@ export function mountWidget(options: KycMountOptions): KycHandle {
    */
   function beginStep(step: Requirement) {
     notice = null;
+    // The chip is read by a phone, not a camera. Checked before the document
+    // types, because a chip step names the documents it applies to and would
+    // otherwise open the camera and ask for a photograph of a passport the
+    // applicant has already photographed.
+    if (step.type === 'NFC_READ') {
+      emit({ type: 'step_started', stepId: step.id });
+      view = { kind: 'chip', step };
+      render();
+      return;
+    }
     if (step.acceptedDocumentTypes.length === 0) {
       emit({ type: 'step_started', stepId: step.id });
       view = { kind: 'details', step };
@@ -376,6 +445,73 @@ export function mountWidget(options: KycMountOptions): KycHandle {
 
     card.append(form);
     (form.querySelector('input') as HTMLInputElement | null)?.focus();
+  }
+
+  /**
+   * Handing the applicant over to a phone.
+   *
+   * A browser cannot talk to a passport chip — there is no web API for it, on
+   * any platform — so this step cannot be completed where the rest of the flow
+   * happens. The link carries the same short-lived token the page is already
+   * holding, so nothing new is minted and nothing is stored on the phone.
+   *
+   * On a phone the link is simply tapped. On a desktop it needs to travel, which
+   * is what the QR code is for — supplied by the host rather than bundled,
+   * because a QR encoder would double the size of this widget for the sake of
+   * one screen that most integrators will replace anyway.
+   */
+  function renderChip(state: Extract<View, { kind: 'chip' }>) {
+    const link = chipLink({
+      token: options.token,
+      applicantId: options.applicantId,
+      apiBaseUrl: baseUrl,
+    });
+
+    card.append(
+      backLink(),
+      el('h2', {}, state.step.label),
+      el(
+        'p',
+        {},
+        'Your passport has a chip, and reading it proves the document is genuine ' +
+          'rather than merely looking genuine. It needs a phone: a browser cannot ' +
+          'talk to a chip.',
+      ),
+    );
+
+    const qr = options.renderQr?.(link);
+    if (qr) {
+      const holder = el('div', { class: 'chip-qr' });
+      holder.innerHTML = qr;
+      card.append(holder, el('p', { class: 'hint' }, 'Scan this with the phone that has the app.'));
+    }
+
+    const open = el('a', { class: 'primary as-button', href: link }, 'Open on this phone');
+    card.append(open);
+
+    const copy = el('button', { class: 'link-button', type: 'button' }, 'Copy the link instead');
+    copy.addEventListener('click', () => {
+      void navigator.clipboard?.writeText(link);
+      notice = { text: 'Link copied. Open it on the phone with the app installed.', tone: 'ok' };
+      render();
+    });
+    card.append(copy);
+
+    // Optional steps must be skippable, or an applicant without the app is
+    // stuck on a screen with no way forward.
+    if (!state.step.required) {
+      const skip = el('button', { class: 'link-button', type: 'button' }, 'Skip — I cannot do this now');
+      skip.addEventListener('click', backToChecklist);
+      card.append(skip);
+    }
+
+    card.append(
+      el(
+        'p',
+        { class: 'hint' },
+        'Once the phone finishes, come back here and continue.',
+      ),
+    );
   }
 
   function renderCapture(state: Extract<View, { kind: 'capture' }>) {

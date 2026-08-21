@@ -1,4 +1,21 @@
-import { KycVerification, type KycHandle } from '@kyc/websdk';
+import QRCode from 'qrcode';
+import { KycVerification, chipLink, type KycHandle } from '@kyc/websdk';
+
+/**
+ * QR markup, kept ready before the widget asks for it.
+ *
+ * Generating one is asynchronous and the widget renders synchronously, so the
+ * code is produced as soon as the session exists and looked up when the chip
+ * screen appears. Cheaper than making every render in the SDK async for the
+ * sake of one panel.
+ */
+const qrCache = new Map<string, string>();
+
+function prepareQr(text: string) {
+  void QRCode.toString(text, { type: 'svg', margin: 1, width: 200 })
+    .then((svg) => qrCache.set(text, svg))
+    .catch(() => undefined);
+}
 
 /**
  * Hosted verification.
@@ -175,6 +192,11 @@ function renderFlow() {
   if (!session) return;
   shell(h('div', { id: 'widget' }));
 
+  // The chip link the widget will offer, encoded ahead of being needed. Built
+  // by the SDK rather than reconstructed here — the two expressions drifted
+  // apart immediately when they were separate, and the QR quietly vanished.
+  prepareQr(chipLink({ token: session.token, applicantId: session.applicantId, apiBaseUrl: API }));
+
   widget?.destroy();
   widget = KycVerification.mount({
     container: '#widget',
@@ -183,6 +205,10 @@ function renderFlow() {
     apiBaseUrl: API,
     // This page states it above the panel already.
     hideSimulationNotice: true,
+    // Supplied by the host rather than bundled into the widget: a QR encoder
+    // would roughly double the SDK's size, and this is the one screen that
+    // needs one — a desktop visitor has to get the chip link onto a phone.
+    renderQr: (text) => qrCache.get(text) ?? '',
     onComplete: () => {
       // The decision is made by a worker consuming a queue, so it is not ready
       // the instant submit returns.

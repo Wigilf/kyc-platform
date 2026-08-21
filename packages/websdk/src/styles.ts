@@ -108,6 +108,28 @@ button.step-go::after {
   line-height: 1;
 }
 
+/* Offered, not finished. The tick outline stays empty. */
+button.step-go.optional .done-note { color: var(--kyc-dim); }
+
+.chip-qr {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid var(--kyc-border, #dfe3e9);
+  border-radius: 8px;
+  margin: 4px 0 10px;
+}
+.chip-qr svg { width: 180px; height: 180px; }
+
+a.as-button {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+a.primary.as-button:hover { filter: brightness(0.95); }
+
 .back-link {
   display: inline-flex;
   align-items: center;
@@ -162,7 +184,10 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--kyc-accent); }
 button:disabled { opacity: 0.55; cursor: not-allowed; }
-button.primary {
+/* The chip step's main action is a link, not a button — it opens an app. It
+   still has to look like the main action. */
+button.primary,
+a.primary.as-button {
   background: var(--kyc-accent);
   border-color: var(--kyc-accent);
   color: var(--kyc-accent-fg);

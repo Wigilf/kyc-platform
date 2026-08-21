@@ -2,6 +2,7 @@ import { mountWidget } from './widget.js';
 import type { KycHandle, KycMountOptions } from './types.js';
 
 export { KycApiError } from './client.js';
+export { chipLink } from './widget.js';
 export type {
   ApplicantStatus,
   KycEvent,

@@ -82,8 +82,20 @@ describe('missingApplicantFields', () => {
 describe('stepLabel', () => {
   it('reads as prose rather than an enum', () => {
     // This reaches the applicant, so "APPLICANT_DATA" is not acceptable copy.
-    expect(stepLabel(stepOf('data'))).toBe('Applicant data');
+    for (const id of ['data', 'poa']) {
+      const label = stepLabel(stepOf(id));
+      expect(label).not.toMatch(/_/);
+      expect(label).not.toBe(label.toUpperCase());
+    }
     expect(stepLabel(stepOf('poa'))).toBe('Proof of address');
+  });
+
+  it('names the steps whose type does not make a sentence', () => {
+    // Humanising the type gives "Nfc read", which is jargon shouted at someone
+    // who has never heard it — and they have to understand the ask well enough
+    // to go and find a phone.
+    expect(stepLabel({ ...stepOf('data'), type: 'NFC_READ' as never })).toBe('Passport chip');
+    expect(stepLabel(stepOf('data'))).toBe('Your details');
   });
 
   it('prefers an explicit label when the level sets one', () => {

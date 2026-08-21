@@ -244,9 +244,30 @@ export function missingApplicantFields(
   });
 }
 
-/** Wording for the applicant. Falls back to the type, made readable. */
+/**
+ * Wording for the applicant.
+ *
+ * Named where the type does not make a sentence. Humanising `NFC_READ` gives
+ * "Nfc read", which is jargon shouted at somebody who has never heard it — and
+ * the applicant has to understand what is being asked well enough to go and
+ * find a phone.
+ */
+const STEP_LABELS: Record<string, string> = {
+  NFC_READ: 'Passport chip',
+  APPLICANT_DATA: 'Your details',
+  IDENTITY_DOCUMENT: 'Identity document',
+  PROOF_OF_ADDRESS: 'Proof of address',
+  AML_SCREENING: 'Sanctions screening',
+  DEVICE_INTELLIGENCE: 'Device checks',
+  EMAIL_VERIFICATION: 'Email address',
+  PHONE_VERIFICATION: 'Phone number',
+  VIDEO_INTERVIEW: 'Video interview',
+};
+
 export function stepLabel(step: StepDefinition): string {
   if (step.label) return step.label;
+  const named = STEP_LABELS[step.type];
+  if (named) return named;
   const words = step.type.replace(/_/g, ' ').toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
@@ -304,6 +325,12 @@ export const LEVEL_TEMPLATES: Record<string, LevelDefinition> = {
       }),
       step('selfie', 'SELFIE', 2, { faceMatchThreshold: 0.82 }),
       step('liveness', 'LIVENESS', 2, { livenessThreshold: 0.85 }),
+      // Optional, deliberately. Reading the chip is the strongest evidence
+      // available — the issuing state's own signature — but it needs a phone
+      // with the app, and requiring it would strand every applicant who has
+      // neither. Set `required: true` where the population makes that safe;
+      // the pipeline then blocks approval until a chip read arrives.
+      step('chip', 'NFC_READ', 2, {}, { required: false }),
       step('poa', 'PROOF_OF_ADDRESS', 3, {
         acceptedDocumentTypes: ['UTILITY_BILL', 'BANK_STATEMENT', 'TAX_DOCUMENT'],
         maxDocumentAgeDays: 90,
