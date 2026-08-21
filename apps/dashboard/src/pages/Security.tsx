@@ -34,6 +34,42 @@ export default function Security() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState<'untried' | 'yes' | 'no'>('untried');
+
+  /**
+   * Copying the recovery codes.
+   *
+   * This used to fire the write without waiting and immediately tick "I have
+   * saved these somewhere safe", which also unlocked the button that switches
+   * two-factor on. The clipboard is unavailable outside a secure context and
+   * can reject for reasons the page never sees — so someone could enable a
+   * second factor believing they held recovery codes they had never received,
+   * and find out at the worst possible moment.
+   *
+   * It no longer ticks the box at all. Copying is not saving, and the one
+   * assurance standing between a lost phone and a locked account should be
+   * something a person states deliberately.
+   */
+  async function copyCodes(codes: string[]) {
+    try {
+      if (!navigator.clipboard) throw new Error('no clipboard');
+      await navigator.clipboard.writeText(codes.join('\n'));
+      setCopied('yes');
+    } catch {
+      setCopied('no');
+    }
+  }
+
+  /** A file is closer to "saved" than a clipboard, and works without one. */
+  function downloadCodes(codes: string[]) {
+    const blob = new Blob([`${codes.join('\n')}\n`], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'kyc-console-recovery-codes.txt';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   useEffect(() => {
     if (!enrolment) {
@@ -144,12 +180,12 @@ export default function Security() {
                 <div className="enrol-actions">
                   <button
                     type="button"
-                    onClick={() => {
-                      void navigator.clipboard?.writeText(enrolment.recoveryCodes.join('\n'));
-                      setSaved(true);
-                    }}
+                    onClick={() => void copyCodes(enrolment.recoveryCodes)}
                   >
-                    Copy codes
+                    {copied === 'yes' ? 'Copied' : 'Copy codes'}
+                  </button>
+                  <button type="button" onClick={() => downloadCodes(enrolment.recoveryCodes)}>
+                    Download
                   </button>
                   <label>
                     <input
@@ -182,6 +218,12 @@ export default function Security() {
                     {busy ? 'Checking…' : 'Turn on'}
                   </button>
                 </form>
+                {copied === 'no' ? (
+                  <p className="doc-simulated">
+                    Copying did not work in this browser. Use Download, or select the codes
+                    above and copy them by hand.
+                  </p>
+                ) : null}
                 {!saved ? (
                   <p className="muted">Confirm you have saved the recovery codes first.</p>
                 ) : null}

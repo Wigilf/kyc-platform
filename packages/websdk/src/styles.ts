@@ -111,6 +111,17 @@ button.step-go::after {
 /* Offered, not finished. The tick outline stays empty. */
 button.step-go.optional .done-note { color: var(--kyc-dim); }
 
+.chip-link-text {
+  font-family: var(--kyc-mono, ui-monospace, monospace);
+  font-size: 11px;
+  word-break: break-all;
+  background: var(--kyc-surface-2, #f1f3f6);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 8px 0 0;
+  user-select: all;
+}
+
 .chip-qr {
   display: flex;
   justify-content: center;

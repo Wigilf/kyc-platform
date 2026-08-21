@@ -491,11 +491,28 @@ export function mountWidget(options: KycMountOptions): KycHandle {
 
     const copy = el('button', { class: 'link-button', type: 'button' }, 'Copy the link instead');
     copy.addEventListener('click', () => {
-      void navigator.clipboard?.writeText(link);
-      notice = { text: 'Link copied. Open it on the phone with the app installed.', tone: 'ok' };
-      render();
+      // Waited on, and only claimed once it happened. The clipboard is absent
+      // outside a secure context and can reject for reasons the page cannot
+      // see, and this said "Link copied" either way — leaving somebody pasting
+      // nothing into their phone and wondering why.
+      void navigator.clipboard
+        ?.writeText(link)
+        .then(() => {
+          notice = { text: 'Link copied. Open it on the phone with the app.', tone: 'ok' };
+          render();
+        })
+        .catch(showTheLinkInstead);
+      if (!navigator.clipboard) showTheLinkInstead();
     });
     card.append(copy);
+
+    /** When copying is impossible, show the thing so it can be copied by hand. */
+    function showTheLinkInstead() {
+      notice = { text: 'Copying is not available here — the link is below.', tone: 'err' };
+      render();
+      const shown = el('p', { class: 'chip-link-text' }, link);
+      card.append(shown);
+    }
 
     // Optional steps must be skippable, or an applicant without the app is
     // stuck on a screen with no way forward.
